@@ -1,0 +1,39 @@
+# ==========================================
+# SECRETS & ENVIRONMENT (NEVER COMMIT THESE)
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# PYTHON ARTIFACTS
+# ==========================================
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# FRONTEND / NODE.JS (For upcoming Next.js)
+# ==========================================
+node_modules/
+.next/
+out/
+build/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================================
+# OPERATING SYSTEM & DOCKER ARTIFACTS
+# ==========================================
+.DS_Store
+Thumbs.db
+*.log

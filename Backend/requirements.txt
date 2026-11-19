@@ -1,0 +1,21 @@
+# Web Framework & Server
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+
+# Docker Engine SDK
+docker
+
+# Database & Object Storage
+sqlalchemy
+asyncpg
+boto3
+
+# AI Provider
+google-genai
+
+# Utilities
+python-dotenv
+rich
+retry
