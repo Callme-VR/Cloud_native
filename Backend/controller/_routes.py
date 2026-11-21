@@ -9,14 +9,17 @@ Provides REST endpoints and WebSocket channels for:
 """
 
 import asyncio
+import os
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from google import genai
+from google.genai import types
 from rich.console import Console
 
-from DB._projects import (
+from DB import (
     get_db,
     create_agent_run,
     record_execution_step,
@@ -24,8 +27,17 @@ from DB._projects import (
     AgentRun,
     ExecutionStep,
     AsyncSessionLocal,
+    ChatSession,
+    ChatMessage,
+    create_chat_session,
+    list_chat_sessions,
+    get_chat_session,
+    get_chat_history,
+    update_chat_session,
+    delete_chat_session,
+    add_chat_message,
+    NeonObjectStorage,
 )
-from DB._object_storage import NeonObjectStorage
 from Harness._agent_loop import run_agent_loop
 
 console = Console()
@@ -48,6 +60,47 @@ class RunResponse(BaseModel):
     git_diff: str | None = None
     created_at: str
     completed_at: str | None = None
+
+
+# Chat Session Request & Response Schemas
+class CreateChatRequest(BaseModel):
+    title: str = Field(default="New Chat", description="Title for the conversation.")
+    model_name: str = Field(default="gemini-2.5-flash", description="Gemini model to use.")
+    system_prompt: str | None = Field(default=None, description="Optional custom system prompt.")
+    project_id: str | None = Field(default=None, description="Optional linked project ID.")
+
+
+class UpdateChatRequest(BaseModel):
+    title: str | None = Field(default=None, description="Updated conversation title.")
+    model_name: str | None = Field(default=None, description="Updated model identifier.")
+    system_prompt: str | None = Field(default=None, description="Updated system prompt.")
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(..., description="User message text to send.")
+
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    session_id: str
+    role: str
+    content: str
+    metadata_json: dict[str, Any] = {}
+    created_at: str
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    title: str
+    model_name: str
+    system_prompt: str | None = None
+    project_id: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class ChatSessionDetailResponse(ChatSessionResponse):
+    messages: list[ChatMessageResponse] = []
 
 
 # 2. WebSocket Connection Manager for Live Streaming
@@ -297,3 +350,223 @@ async def stream_run_events(websocket: WebSocket, run_id: str):
             await websocket.receive_text()
     except WebSocketDisconnect:
         await manager.disconnect(run_id, websocket)
+
+
+# 6. Chat Session & Conversational Memory Endpoints
+@api_router.post("/chats", response_model=ChatSessionResponse, status_code=201, tags=["Chat Sessions"])
+async def create_chat(
+    payload: CreateChatRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Creates a new conversational chat session in Neon PostgreSQL."""
+    chat = await create_chat_session(
+        session=db,
+        title=payload.title,
+        model_name=payload.model_name,
+        system_prompt=payload.system_prompt,
+        project_id=payload.project_id
+    )
+    return ChatSessionResponse(
+        id=chat.id,
+        title=chat.title,
+        model_name=chat.model_name,
+        system_prompt=chat.system_prompt,
+        project_id=chat.project_id,
+        created_at=chat.created_at.isoformat(),
+        updated_at=chat.updated_at.isoformat()
+    )
+
+
+@api_router.get("/chats", response_model=list[ChatSessionResponse], tags=["Chat Sessions"])
+async def list_chats(
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db)
+):
+    """Lists all chat sessions ordered by latest updated activity (for the frontend sidebar)."""
+    chats = await list_chat_sessions(session=db, limit=limit, offset=offset)
+    return [
+        ChatSessionResponse(
+            id=c.id,
+            title=c.title,
+            model_name=c.model_name,
+            system_prompt=c.system_prompt,
+            project_id=c.project_id,
+            created_at=c.created_at.isoformat(),
+            updated_at=c.updated_at.isoformat()
+        )
+        for c in chats
+    ]
+
+
+@api_router.get("/chats/{chat_id}", response_model=ChatSessionDetailResponse, tags=["Chat Sessions"])
+async def get_chat_details(
+    chat_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Fetches a chat session with its full historical messages in chronological order."""
+    chat = await get_chat_session(session=db, session_id=chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    history = await get_chat_history(session=db, session_id=chat_id)
+    return ChatSessionDetailResponse(
+        id=chat.id,
+        title=chat.title,
+        model_name=chat.model_name,
+        system_prompt=chat.system_prompt,
+        project_id=chat.project_id,
+        created_at=chat.created_at.isoformat(),
+        updated_at=chat.updated_at.isoformat(),
+        messages=[
+            ChatMessageResponse(
+                id=m.id,
+                session_id=m.session_id,
+                role=m.role,
+                content=m.content,
+                metadata_json=m.metadata_json or {},
+                created_at=m.created_at.isoformat()
+            )
+            for m in history
+        ]
+    )
+
+
+@api_router.get("/chats/{chat_id}/history", response_model=list[ChatMessageResponse], tags=["Chat Sessions"])
+async def get_chat_message_history(
+    chat_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieves only the message history array for a chat session."""
+    chat = await get_chat_session(session=db, session_id=chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    history = await get_chat_history(session=db, session_id=chat_id)
+    return [
+        ChatMessageResponse(
+            id=m.id,
+            session_id=m.session_id,
+            role=m.role,
+            content=m.content,
+            metadata_json=m.metadata_json or {},
+            created_at=m.created_at.isoformat()
+        )
+        for m in history
+    ]
+
+
+@api_router.patch("/chats/{chat_id}", response_model=ChatSessionResponse, tags=["Chat Sessions"])
+async def update_chat(
+    chat_id: str,
+    payload: UpdateChatRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Updates chat session metadata (title, model, or system prompt)."""
+    chat = await update_chat_session(
+        session=db,
+        session_id=chat_id,
+        title=payload.title,
+        model_name=payload.model_name,
+        system_prompt=payload.system_prompt
+    )
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    return ChatSessionResponse(
+        id=chat.id,
+        title=chat.title,
+        model_name=chat.model_name,
+        system_prompt=chat.system_prompt,
+        project_id=chat.project_id,
+        created_at=chat.created_at.isoformat(),
+        updated_at=chat.updated_at.isoformat()
+    )
+
+
+@api_router.delete("/chats/{chat_id}", tags=["Chat Sessions"])
+async def delete_chat(
+    chat_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Deletes a chat session and cascades all messages."""
+    success = await delete_chat_session(session=db, session_id=chat_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    return {
+        "message": "Chat session and message history deleted successfully",
+        "id": chat_id
+    }
+
+
+@api_router.post("/chats/{chat_id}/messages", response_model=ChatMessageResponse, status_code=201, tags=["Chat Sessions"])
+async def send_chat_message(
+    chat_id: str,
+    payload: SendMessageRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Appends a user message to the session, retrieves history, invokes Gemini
+    with full conversational context, persists the assistant reply, and returns it.
+    """
+    chat = await get_chat_session(session=db, session_id=chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    # 1. Save user message to Neon PostgreSQL
+    user_msg = await add_chat_message(
+        session=db,
+        session_id=chat_id,
+        role="user",
+        content=payload.content
+    )
+
+    # 2. Build multi-turn context from prior history
+    history = await get_chat_history(session=db, session_id=chat_id)
+
+    # 3. Call Gemini via official google-genai client
+    api_key = os.getenv("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
+
+    gemini_contents = []
+    for msg in history:
+        # Gemini expects 'user' or 'model'
+        genai_role = "user" if msg.role == "user" else "model"
+        gemini_contents.append(
+            types.Content(
+                role=genai_role,
+                parts=[types.Part.from_text(text=msg.content)]
+            )
+        )
+
+    config_kwargs = {}
+    if chat.system_prompt:
+        config_kwargs["system_instruction"] = chat.system_prompt
+
+    try:
+        response = client.models.generate_content(
+            model=chat.model_name or "gemini-2.5-flash",
+            contents=gemini_contents,
+            config=types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+        )
+        reply_text = response.text or "I have processed your message."
+    except Exception as e:
+        reply_text = f"Error generating response: {str(e)}"
+
+    # 4. Save assistant message to Neon PostgreSQL
+    assistant_msg = await add_chat_message(
+        session=db,
+        session_id=chat_id,
+        role="assistant",
+        content=reply_text
+    )
+
+    return ChatMessageResponse(
+        id=assistant_msg.id,
+        session_id=assistant_msg.session_id,
+        role=assistant_msg.role,
+        content=assistant_msg.content,
+        metadata_json=assistant_msg.metadata_json or {},
+        created_at=assistant_msg.created_at.isoformat()
+    )

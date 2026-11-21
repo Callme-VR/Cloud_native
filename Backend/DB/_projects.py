@@ -101,6 +101,7 @@ class ExecutionStep(Base):
 # 3. Database CRUD Operations
 async def init_db():
     """Initializes and creates all database tables."""
+    import DB._chat  # noqa: F401 - registers ChatSession & ChatMessage with Base.metadata
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     console.print("[green]✔ Database schema initialized successfully.[/green]")
