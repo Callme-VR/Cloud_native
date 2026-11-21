@@ -1,6 +1,6 @@
 # Cloud-Native AI Coding Harness: Senior Technical Interview Guide (`Asked.md`)
 
-> A comprehensive, battle-tested interview guide covering the **Approach, Architecture, Design Decisions, Systems Implementation, and Problem-Solving Strategies** for this Cloud-Native AI Coding Agent Harness.
+> A comprehensive, battle-tested interview guide covering the **Approach, Architecture, Design Decisions, Systems Implementation, Database & Storage Tiers, and Problem-Solving Strategies** for this Cloud-Native AI Coding Agent Harness.
 
 ---
 
@@ -10,7 +10,8 @@
 3. [Category 3: Core Design Decisions & Engineering Trade-Offs](#category-3-core-design-decisions--engineering-trade-offs)
 4. [Category 4: Linux Kernel & Container Security Implementation](#category-4-linux-kernel--container-security-implementation)
 5. [Category 5: Cognitive Agent Loop & Tooling Failure Modes](#category-5-cognitive-agent-loop--tooling-failure-modes)
-6. [Category 6: Problem-Solving Strategies & Incident Debugging](#category-6-problem-solving-strategies--incident-debugging)
+6. [Category 6: Cloud Persistence, Database & Object Storage (Neon)](#category-6-cloud-persistence-database--object-storage-neon)
+7. [Category 7: Problem-Solving Strategies & Incident Debugging (Issues #001–#008)](#category-7-problem-solving-strategies--incident-debugging-issues-001008)
 
 ---
 
@@ -28,34 +29,56 @@
 ### Q1.2: "How did you define the boundaries of your system? Where does the agent's responsibility end and the platform's begin?"
 * **What the interviewer is testing:** Architectural boundaries, separation of concerns, and defensive engineering.
 * **Senior-Level Answer:**
-  > *"We implemented a strict tripartite boundary:*
-  > 1. *The **Brain (LLM Client & Agent Loop)**: Responsible solely for reasoning, task planning, and emitting structured tool calls. It has zero access to Docker sockets, file descriptors, or host network interfaces.*
-  > 2. *The **Contract Bridge (Tool Dispatcher)**: Validates schemas, sanitizes inputs, enforces execution timeouts, and intercepts exceptions.*
-  > 3. *The **Execution Sandbox (Docker Container)**: A completely isolated Linux environment running under hard cgroups and dropped privileges. It only executes what the bridge allows and emits stdout/stderr.*
+  > *"We implemented a strict four-layer architecture:*
+  > 1. *The **Brain (LLM Client & Agent Loop)**: Responsible solely for reasoning, task planning, and emitting structured tool calls ([`Harness/_LLM_client.py`](file:///d:/Complex_backend/Cloud_native/Backend/Harness/_LLM_client.py)). It has zero access to Docker sockets, file descriptors, or host network interfaces.*
+  > 2. *The **Contract Bridge (Tool Dispatcher)**: Validates schemas, sanitizes inputs, enforces execution timeouts, and intercepts exceptions ([`Harness/_execute_tools.py`](file:///d:/Complex_backend/Cloud_native/Backend/Harness/_execute_tools.py)).*
+  > 3. *The **Execution Sandbox (Docker Container)**: A completely isolated Linux environment running under hard cgroups and dropped privileges ([`Sandbox/_sandbox_setup.py`](file:///d:/Complex_backend/Cloud_native/Backend/Sandbox/_sandbox_setup.py)). It only executes what the bridge allows and emits stdout/stderr.*
+  > 4. *The **Control Plane & Dual-Tier Persistence**: FastAPI API Gateway ([`brain/_main.py`](file:///d:/Complex_backend/Cloud_native/Backend/brain/_main.py), [`controller/_routes.py`](file:///d:/Complex_backend/Cloud_native/Backend/controller/_routes.py)), Neon Serverless PostgreSQL ([`DB/_projects.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_projects.py)), and Neon S3 Object Storage ([`DB/_object_storage.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_object_storage.py)).*
   > 
-  > *By keeping these boundaries airtight, we can swap out the LLM provider (Gemini $\rightarrow$ Claude $\rightarrow$ local DeepSeek) or swap out the isolation technology (Docker $\rightarrow$ Firecracker microVMs) without rewriting the rest of the system."*
+  > *By keeping these boundaries airtight, we can swap out the LLM provider (Gemini $\to$ Claude $\to$ DeepSeek) or swap out the isolation technology (Docker $\to$ Firecracker microVMs) without rewriting the rest of the system."*
 
 ---
 
 ## Category 2: System Architecture & Concurrency at Scale (100+ Agents)
 
-### Q2.1: "You claim support for 100+ concurrent agents. How do you prevent the Docker daemon from locking up under a thundering herd?"
+### Q2.1: "How do you prevent the Docker daemon from locking up under a thundering herd when many agents launch simultaneously?"
 * **What the interviewer is testing:** Docker daemon architecture, UNIX socket serialization, concurrency control, and rate limiting.
 * **Senior-Level Answer:**
-  > *"The Docker daemon (`dockerd`) communicates over a single UNIX socket (`/var/run/docker.sock`). If 100 agents try to call `docker run` concurrently within the same second, the socket backlog overflows, thread pools exhaust, and the daemon deadlocks or times out.*
+  > *"The Docker daemon (`dockerd`) communicates over a single UNIX socket (`/var/run/docker.sock`) or Windows named pipe. If 100 agents try to call `docker run` concurrently within the same second, the socket backlog overflows, thread pools exhaust, and the daemon deadlocks or times out.*
   > 
   > *We solve this with two architectural mechanisms:*
-  > 1. * **Asynchronous Semaphore / Queue:** In Python/FastAPI, container provisioning is fronted by an `asyncio.Semaphore(MAX_CONCURRENT_CREATIONS)` (or Celery/Redis in distributed setups). This throttles concurrent daemon creation calls to a safe threshold (e.g., 10 per second), queuing subsequent requests.*
+  > 1. * **Asynchronous Semaphore / Queue:** In Python/FastAPI, container provisioning is fronted by an `asyncio.Semaphore(MAX_CONCURRENT_CREATIONS)` (or Celery/Redis in distributed setups). This throttles concurrent daemon creation calls to a safe threshold (e.g., 3 locally, 10 per worker in cloud), queuing subsequent requests.*
   > 2. * **Pre-Warmed Standby Pool:** Instead of cold-starting containers on-demand, an asynchronous pool manager maintains a buffer of idle, pre-spawned containers (`command="sleep infinity"`). When an agent requests a sandbox, checkout latency is under 50ms without hitting `client.containers.run()` at all."*
 
-### Q2.2: "How does the system handle real-time observability when 100 agents are executing terminal commands simultaneously?"
+### Q2.2: "How does the system prevent blocking FastAPI's async event loop when using the synchronous Docker SDK?"
+* **What the interviewer is testing:** Python asyncio internals, event loop blocking, thread pool executors, and cross-thread communication.
+* **Senior-Level Answer:**
+  > *"The official Docker Python SDK (`docker-py`) makes synchronous, blocking HTTP calls over a UNIX socket or Windows named pipe. If you call `container.exec_run()` or `run_agent_loop()` inside an async endpoint like `@api_router.post('/runs')`, the event loop is blocked. All concurrent requests, WebSocket pings, and health check endpoints freeze until the agent finishes.*
+  > 
+  > *In [`controller/_routes.py`](file:///d:/Complex_backend/Cloud_native/Backend/controller/_routes.py#L253-L262), we decouple execution using `loop.run_in_executor(None, _execute_agent_background, ...)`:*
+  > * *The agent loop executes in a separate worker thread from Python's default `ThreadPoolExecutor`.*
+  > * *To send real-time thoughts and tool events back to async WebSocket clients, the background thread uses a sync-to-async bridge: `asyncio.run_coroutine_threadsafe(_async_step_callback(event_data), loop)`.*
+  > * *This guarantees that the main event loop remains 100% responsive, handling HTTP requests and WebSocket streaming concurrently with zero stalls."*
+
+### Q2.3: "How does the system handle real-time observability when multiple agents are executing commands simultaneously?"
 * **What the interviewer is testing:** Backpressure, streaming protocols (WebSockets/SSE), async I/O, and frontend control plane design.
 * **Senior-Level Answer:**
-  > *"We built an asynchronous streaming pipeline:*
-  > * *Inside `_sandbox_executor.py`, `run_command_stream` hooks into Docker's `exec_start(stream=True)` as an asynchronous generator yielding output chunks.*
-  > * *The FastAPI controller exposes a WebSocket / Server-Sent Events (SSE) endpoint per run ID.*
-  > * *To prevent network buffer bloat when an agent runs a verbose command (like `npm install` or massive test outputs), we implement chunk batching and backpressure: terminal chunks are throttled at 50ms intervals before pushing to the React frontend.*
-  > * *The React frontend renders through `xterm.js` using virtualized canvas rendering to prevent DOM thread lockups under heavy output."*
+  > *"We built an event-driven streaming pipeline:*
+  > * *Inside [`_agent_loop.py`](file:///d:/Complex_backend/Cloud_native/Backend/Harness/_agent_loop.py#L72-L78), we hook an `event_callback` into every thought emission and tool execution.*
+  > * *Inside [`controller/_routes.py`](file:///d:/Complex_backend/Cloud_native/Backend/controller/_routes.py#L107-L141), a `ConnectionManager` maintains active WebSocket client lists mapped by `run_id`.*
+  > * *When a tool runs, [`_async_step_callback`](file:///d:/Complex_backend/Cloud_native/Backend/controller/_routes.py#L157-L171) simultaneously broadcasts JSON events (`thought`, `tool_execution`, `status`, `finish`) to all connected WebSocket subscribers and persists the step in Neon PostgreSQL.*
+  > * *The Next.js 15 frontend consumes the stream and renders output live via `xterm.js` and dynamic step cards."*
+
+### Q2.4: "How do you prevent zombie containers from leaking memory and PIDs when tasks crash or time out?"
+* **What the interviewer is testing:** Container lifecycle management, background reconciliation, and failure recovery.
+* **Senior-Level Answer:**
+  > *"Relying purely on `try...finally` blocks is insufficient: if the backend server process crashes, experiences a hard kill (`SIGKILL`), or encounters an unhandled exception, containers and volumes remain orphaned on the host.*
+  > 
+  > *In [`brain/_main.py`](file:///d:/Complex_backend/Cloud_native/Backend/brain/_main.py#L26-L61), we implemented the **Janitor Reaper** service:*
+  > * *An asynchronous background task registered in FastAPI's `lifespan` runs every 300 seconds (5 minutes).*
+  > * *It queries Docker for all containers matching the prefix `agent-sandbox-`.*
+  > * *It parses each container's creation timestamp (`c.attrs['Created']`). Any container older than 600 seconds (10-minute TTL) is forcibly destroyed via `c.remove(v=True, force=True)`.*
+  > * *This ensures that even if an agent hangs or a server reboots, leaked compute and disk inodes are automatically reclaimed."*
 
 ---
 
@@ -88,7 +111,7 @@
   > *"Completely disabling the network (`network_disabled=True`) is the safest default because it guarantees zero data exfiltration and prevents SSRF attacks against internal infrastructure.*
   > 
   > *In production, we handle dependencies using two strategies:*
-  > 1. * **Prebuilt Caching (Our Chosen Baseline):** Base images are built with the target repository's virtual environment and standard test suites pre-installed (`cloud-native-sandbox:latest`). The agent never needs to touch the public internet at runtime.*
+  > 1. * **Prebuilt Caching (Our Chosen Baseline):** Base images are built with the target repository's virtual environment and standard test suites pre-installed ([`Backend/Dockerfile`](file:///d:/Complex_backend/Cloud_native/Backend/Dockerfile)). The agent never needs to touch the public internet at runtime.*
   > 2. * **Egress Forward Proxy:** If runtime installation is strictly necessary, we re-enable networking but route all container egress through an authenticating proxy (like Squid or Envoy) with a strict domain allowlist (e.g., allow `pypi.org`, `files.pythonhosted.org`, and `github.com` only; deny all internal RFC-1918 subnets and arbitrary external IPs)."*
 
 ---
@@ -98,7 +121,7 @@
 ### Q4.1: "Explain the exact Linux kernel mechanisms behind your container resource limits."
 * **What the interviewer is testing:** Understanding of Linux cgroups (v1/v2), kernel process tables, and OOM killer behavior.
 * **Senior-Level Answer:**
-  > *"We configure three cgroup controllers directly through the Docker SDK:*
+  > *"In [`_sandbox_setup.py`](file:///d:/Complex_backend/Cloud_native/Backend/Sandbox/_sandbox_setup.py#L61-L65), we configure three cgroup controllers directly through the Docker SDK:*
   > 1. * **Memory (`mem_limit="512m"`):** Configures the `memory.max` cgroup controller. If the agent's code triggers a memory leak or allocates a 2GB array, the kernel OOM killer sends a `SIGKILL` to the offending process inside the container. The host operating system's RAM is never compromised.*
   > 2. * **CPU (`nano_cpus=1_000_000_000`):** Configures the `cpu.max` CFS (Completely Fair Scheduler) quota. It allocates exactly $1.0$ CPU second per second of wall-clock time. Even if an agent runs an infinite `while True:` loop, it consumes at most 1 CPU core, leaving the host's remaining cores free.*
   > 3. * **Process Ceiling (`pids_limit=64`):** Sets `pids.max`. Mitigates classic fork bombs (`:(){ :|:& };:`). Once 64 processes are spawned, subsequent `fork()` syscalls fail with `EAGAIN` (Resource temporarily unavailable), neutralizing the attack immediately."*
@@ -126,7 +149,7 @@
 ### Q5.1: "How does your ReAct loop maintain state across multi-turn tool invocations without losing context or blowing up token limits?"
 * **What the interviewer is testing:** Context window management, message schemas, and function-response protocol.
 * **Senior-Level Answer:**
-  > *"In `_agent_loop.py`, we implement a stateful multi-turn session using the official Google GenAI SDK:*
+  > *"In [`_agent_loop.py`](file:///d:/Complex_backend/Cloud_native/Backend/Harness/_agent_loop.py#L58-L135), we implement a stateful multi-turn session using the official Google GenAI SDK:*
   > 1. *The initial user prompt kicks off the session.*
   > 2. *When Gemini emits a `FunctionCall` (e.g. `read_file(path="src/main.py")`), we execute the tool in Docker and wrap the output inside a `types.Part.from_function_response(name=..., response={"result": ...})`.*
   > 3. *We pass this structured response back into `chat.send_message()`, which appends it to the turn history.*
@@ -136,49 +159,110 @@
 * **What the interviewer is testing:** Error handling, resilience, self-healing agent loops.
 * **Senior-Level Answer:**
   > *"We treat tool errors as informative feedback for the LLM rather than crashing exceptions:*
-  > * *In `_execute_tools.py`, we implemented upfront defensive validation guards. If the model calls `create_file` without a `path`, we catch it before touching Docker and return `{"status": "error", "error": "Missing required parameter: 'path'"}`.*
+  > * *In [`_execute_tools.py`](file:///d:/Complex_backend/Cloud_native/Backend/Harness/_execute_tools.py#L38-L58), we implemented upfront defensive validation guards (Issue #006). If the model calls `create_file` without a `path`, we catch it before touching Docker and return `{"status": "error", "error": "Missing required parameter: 'path'"}`.*
   > * *If a shell command fails (e.g. `pytest` fails with assertion errors), we capture `stderr` and return `{"status": "error", "exit_code": 1, "stderr": "..."}`.*
   > * *Because the error is packaged as a structured `function_response`, the LLM sees its mistake in the next turn and self-corrects (e.g., 'Oh, tests failed because of ZeroDivisionError on line 5, let me patch line 5')."*
 
-### Q5.3: "Why did you encounter exit code 127 (`git: not found`) and how did you architect a solution?"
-* **What the interviewer is testing:** Debugging under production constraints, Linux exit codes, image customization.
+---
+
+## Category 6: Cloud Persistence, Database & Object Storage (Neon)
+
+### Q6.1: "Why did you implement a dual-tier persistence model instead of storing everything in PostgreSQL?"
+* **What the interviewer is testing:** Storage tiering, database optimization, blob storage trade-offs, and scalability.
 * **Senior-Level Answer:**
-  > *"During our initial end-to-end testing, the agent successfully fixed the code and verified the tests, but `get_git_diff` failed with exit code 127 (`sh: 1: git: not found`).*
-  > * * **Root Cause:** In pursuit of sub-second startup latency, we used `python:3.12-slim`. To keep image size under 45MB, the Debian maintainers omit `git` and development tools.*
-  > * * **Architectural Solution:** Rather than installing `git` on the fly via `apt-get` during every run (which would add 30–60 seconds of network latency), we created a custom prebuilt base image (`Backend/Dockerfile`) that layers `git` and global git configuration on top of `python:3.12-slim`. Once built, Docker caches it locally, keeping sandbox startup under 0.8 seconds while providing full git diff capability."*
+  > *"Storing large text blobs—such as 500KB git diffs, build logs, and workspace snapshots—directly inside relational database tables (like PostgreSQL `TEXT` or `JSONB` columns) is an anti-pattern at scale:*
+  > * *It balloons database table sizes, causing PostgreSQL buffer pool cache thrashing.*
+  > * *It degrades query performance for metadata scans, list views, and status updates.*
+  > * *PostgreSQL TOAST tables add extra disk reads for every row lookup.*
+  > 
+  > *We implemented a strict dual-tier architecture:*
+  > 1. * **Neon Serverless PostgreSQL ([`_projects.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_projects.py), [`_chat.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_chat.py)):** Stores lean, indexable relational records—project metadata, agent run statuses, execution step timestamps, and conversational chat threads.*
+  > 2. * **Neon S3-Compatible Object Storage ([`_object_storage.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_object_storage.py)):** High-durability bucket (`agent-artifacts`) storing unified patch diffs (`runs/{id}/patch.diff`) and raw terminal execution logs (`runs/{id}/terminal.log`).*
+  > 
+  > *This guarantees sub-millisecond database queries while offloading heavy assets to durable, inexpensive object storage."*
+
+### Q6.2: "How do you handle dropped connections in Neon Serverless PostgreSQL when the compute scales to zero?"
+* **What the interviewer is testing:** Serverless database architecture, TCP connection lifecycle, connection pooling.
+* **Senior-Level Answer:**
+  > *"Neon PostgreSQL is serverless and auto-suspends inactive compute nodes to reduce cost. When a compute suspends, open TCP sockets to clients are terminated. Standard connection pools like SQLAlchemy without keep-alives assume connections remain valid, causing the next query to crash with `ConnectionResetError` or `OperationalError: SSL connection has been closed unexpectedly`.*
+  > 
+  > *In [`DB/_projects.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_projects.py#L37-L41), we configure SQLAlchemy's `create_async_engine` with `pool_pre_ping=True`:*
+  > ```python
+  > engine = create_async_engine(
+  >     DATABASE_URL,
+  >     echo=False,
+  >     pool_pre_ping=True,  # Transparently verifies and reconnects dropped sockets
+  > )
+  > ```
+  > *Before handing a connection from the pool to a request handler, SQLAlchemy issues an optimistic test ping (`SELECT 1`). If the connection was terminated by serverless suspension, it recycles the connection seamlessly without throwing 500 Internal Server Errors to clients."*
+
+### Q6.3: "Why did you specify `addressing_style: 'path'` in Boto3 for Neon Object Storage?"
+* **What the interviewer is testing:** S3 API standards, virtual-hosted vs. path-style addressing, cloud storage interop.
+* **Senior-Level Answer:**
+  > *"By default, modern AWS S3 uses virtual-hosted style URLs: `https://<bucket>.<endpoint>`. However, S3-compatible cloud object storage providers (like Neon, MinIO, or Ceph) often route through a base hostname where bucket subdomains do not have wildcard DNS records configured.*
+  > 
+  > *In [`DB/_object_storage.py`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_object_storage.py#L44-L51), we explicitly enforce path-style addressing:*
+  > ```python
+  > self.s3_client = boto3.client(
+  >     "s3",
+  >     endpoint_url=AWS_ENDPOINT_URL_S3,
+  >     config=Config(s3={"addressing_style": "path"})
+  > )
+  > ```
+  > *This directs requests to `https://<endpoint>/<bucket>/<key>`, ensuring 100% compatibility with Neon's S3 proxy endpoints without DNS resolution failures."*
+
+### Q6.4: "How does the conversational chat API preserve multi-turn history when calling Gemini?"
+* **What the interviewer is testing:** State management in stateless HTTP APIs, conversational context windows, LLM message translation.
+* **Senior-Level Answer:**
+  > *"In [`controller/_routes.py`](file:///d:/Complex_backend/Cloud_native/Backend/controller/_routes.py#L504-L572) on `POST /api/chats/{chat_id}/messages`:*
+  > 1. *We persist the incoming user prompt to Neon PostgreSQL under table `chat_messages`.*
+  > 2. *We query all historical messages for the session in chronological order via [`get_chat_history()`](file:///d:/Complex_backend/Cloud_native/Backend/DB/_chat.py#L108-L119).*
+  > 3. *We translate each database record into Google GenAI's `types.Content` object, mapping `user` to role `'user'` and `assistant` to role `'model'`.*
+  > 4. *We pass this multi-turn history along with the session's `system_prompt` into `client.models.generate_content()`.*
+  > 5. *We save the resulting assistant reply in Neon PostgreSQL and touch `chat_sessions.updated_at` so the UI sidebar sorts active conversations to the top.*
+  > 
+  > *This makes our HTTP chat endpoint completely stateless while maintaining full conversational memory in Neon."*
 
 ---
 
-## Category 6: Problem-Solving Strategies & Incident Debugging
+## Category 7: Problem-Solving Strategies & Incident Debugging (Issues #001–#008)
 
-### Q6.1: "Describe your methodology when a defect occurs in this distributed harness."
+### Q7.1: "Describe your methodology when a defect occurs in this distributed harness."
 * **What the interviewer is testing:** Disciplined engineering methodology vs. random trial-and-error patching.
 * **Senior-Level Answer:**
-  > *"We strictly adhere to the 6-pillar protocol codified in our `Issues.md`:*
+  > *"We strictly adhere to the 6-pillar protocol codified in our [`Issues.md`](file:///d:/Complex_backend/Cloud_native/Backend/Issues.md):*
   > 1. * **Observe Failure:** Inspect exact exit codes, stdout/stderr, and stack traces.*
   > 2. * **Ground Mental Model:** Trace physical files, environment configs, and dependency trees.*
-  > 3. * **Formulate Falsifiable Hypothesis:** State the exact causal mechanism (e.g., 'Hypothesis: python-3.12-slim lacks git binary, causing shell exit code 127').*
+  > 3. * **Formulate Falsifiable Hypothesis:** State the exact causal mechanism (e.g., 'Hypothesis: Eager docker.from_env() call crashes API server at boot if Docker Desktop daemon is offline').*
   > 4. * **Surgical Remediation:** Apply the fix with the smallest possible blast radius without syntax masking or dummy fallbacks.*
   > 5. * **Invariance Verification:** Re-run compilations, unit assertions, and deterministic execution scripts to confirm the defect is resolved and no regressions exist.*
   > 6. * **Document:** Log an Issue Resolution Report detailing Root Cause, Changes, and Evidence in `Issues.md`."*
 
-### Q6.2: "How would you migrate this architecture from a single-host prototype to a distributed multi-tenant cloud service?"
-* **What the interviewer is testing:** Distributed systems design, horizontal scaling, cloud architecture.
+### Q7.2: "What was Issue #008, and why was eager initialization an architectural defect?"
+* **What the interviewer is testing:** Import-time side effects, lazy initialization pattern, service resilience.
 * **Senior-Level Answer:**
-  > *"We would scale across 4 layers:*
-  > 1. * **Control Plane (Stateless):** Deploy FastAPI instances behind an Application Load Balancer (ALB). Session state, agent run records, and execution steps are stored in Neon Serverless PostgreSQL with connection pooling.*
-  > 2. * **Task Orchestration:** Use a distributed workflow orchestrator (like Temporal or Celery backed by Redis) to schedule agent tasks across worker nodes.*
-  > 3. * **Compute Workers:** Instead of running Docker directly on the API server, tasks are dispatched to dedicated worker nodes running an isolated container orchestrator (e.g., Kubernetes with gVisor / Kata Containers, or Nomad).*
-  > 4. * **Storage Tier:** Replace local volume storage with ephemeral scratch volumes backed by AWS S3 / Cloudflare R2 for long-term patch archives, git diffs, and execution logs."*
+  > *"During development of the FastAPI gateway, our application crashed immediately on startup with `docker.errors.DockerException: Error while fetching server API version: (2, 'CreateFile', 'The system cannot find the file specified.')`.*
+  > * * **Root Cause:** In [`Sandbox/_sandbox_setup.py`](file:///d:/Complex_backend/Cloud_native/Backend/Sandbox/_sandbox_setup.py), `client = docker.from_env()` was executed at top-level module scope during file import. Because `controller` and `brain._main` imported `Sandbox`, FastAPI tried to connect to Docker before the app could even initialize routes, database tables, or health checks.*
+  > * * **Surgical Remediation:** We replaced top-level instantiation with a lazy cached getter `get_docker_client()`. The Docker client is only connected when `create_sandbox` or `destroy_sandbox` is explicitly invoked at runtime.*
+  > * * **Outcome:** The API Gateway can boot, serve documentation at `/docs`, execute database migrations, and handle chat queries completely independently of Docker daemon availability."*
+
+### Q7.3: "Why did you encounter exit code 127 (`git: not found`) and how did you architect a solution?"
+* **What the interviewer is testing:** Debugging under production constraints, Linux exit codes, image customization.
+* **Senior-Level Answer:**
+  > *"During end-to-end testing, the agent successfully fixed code and passed unit tests, but `get_git_diff` failed with exit code 127 (`sh: 1: git: not found`).*
+  > * * **Root Cause:** In pursuit of sub-second startup latency, we initially used `python:3.12-slim`. To keep the image under 45MB, Debian maintainers omit `git` and development tools.*
+  > * * **Architectural Solution:** Rather than installing `git` on the fly via `apt-get` during every run (which would add 30–60 seconds of network latency and require outbound internet access), we created a custom prebuilt base image ([`Backend/Dockerfile`](file:///d:/Complex_backend/Cloud_native/Backend/Dockerfile)) that layers `git` and global git configuration on top of `python:3.12-slim`.*
+  > * *Docker caches this locally as `cloud-native-sandbox:latest`, keeping sandbox startup under 0.8 seconds while providing full git diff capability."*
 
 ---
 
-## Summary Cheat-Sheet: Top 5 Numbers to Remember in an Interview
+## Summary Cheat-Sheet: Top 6 Metrics & Parameters to Remember
 
-| Metric | Value | Technical Reason |
+| Metric / Parameter | Value | Technical Reason |
 | :--- | :---: | :--- |
-| **Sandbox Memory Ceiling** | `512 MB` | Cgroups `memory.max` prevents host RAM starvation while running 100 agents. |
+| **Sandbox Memory Ceiling** | `512 MB` | Cgroups `memory.max` prevents host RAM starvation while running concurrent agents. |
 | **Sandbox CPU Allocation** | `1.0 Core` | Cgroups `cpu.max` CFS quota prevents 100% CPU lockups from infinite loops. |
 | **PID Ceiling** | `64 Processes` | Cgroups `pids.max` mitigates fork bombs immediately. |
 | **Environment Startup Time** | `< 0.8 Seconds` | Achieved via prebuilt local image caching (`cloud-native-sandbox:latest`). |
+| **Janitor Reaper Scan Interval** | `300s (5 min)` | Periodically purges orphaned sandboxes older than 10 minutes (`600s TTL`). |
 | **Local Concurrency Cap** | `3 Sandboxes` | Concurrency semaphore tuned specifically to protect a 16 GB RAM developer laptop. |
