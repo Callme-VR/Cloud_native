@@ -16,8 +16,20 @@ from rich.panel import Panel
 
 console = Console()
 
-# Initialize Docker client connected to the local Docker daemon
-client = docker.from_env()
+# Lazy Docker client connection
+_docker_client: docker.DockerClient | None = None
+
+
+def get_docker_client() -> docker.DockerClient:
+    """Lazily initializes and caches the Docker client on first operational call."""
+    global _docker_client
+    if _docker_client is None:
+        try:
+            _docker_client = docker.from_env()
+        except Exception as e:
+            console.print(f"[bold red]Failed to connect to Docker daemon: {e}[/bold red]")
+            raise
+    return _docker_client
 
 
 def create_sandbox(image: str = "cloud-native-sandbox:latest") -> tuple[Container, str]:
@@ -30,6 +42,8 @@ def create_sandbox(image: str = "cloud-native-sandbox:latest") -> tuple[Containe
     Returns:
         tuple[Container, str]: The running Docker container and its unique workspace volume name.
     """
+    client = get_docker_client()
+
     # 1. Unique identifiers prevent volume collisions during concurrent agent runs
     unique_id = uuid.uuid4().hex[:8]
     container_name = f"agent-sandbox-{unique_id}"
@@ -83,6 +97,7 @@ def destroy_sandbox(container: Container, volume_name: str | None = None) -> boo
             # Explicitly delete the named workspace volume to prevent storage/inode leaks
             if volume_name:
                 try:
+                    client = get_docker_client()
                     vol = client.volumes.get(volume_name)
                     vol.remove(force=True)
                 except docker.errors.NotFound:

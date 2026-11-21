@@ -10,7 +10,7 @@ Drives the autonomous Observe -> Reason -> Act -> Evaluate cycle:
   6. Repeats until tests pass and the agent calls `finish_task`.
 """
 
-from typing import Any
+from typing import Any, Callable
 from google.genai import types
 from rich.console import Console
 from rich.panel import Panel
@@ -26,7 +26,8 @@ def run_agent_loop(
     task_prompt: str,
     max_iterations: int = 15,
     model_name: str = "gemini-2.5-flash",
-    interactive_destroy: bool = True
+    interactive_destroy: bool = True,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """
     Executes the full autonomous ReAct agent loop inside an isolated Docker sandbox.
@@ -36,6 +37,7 @@ def run_agent_loop(
         max_iterations: Safety ceiling to prevent runaway infinite loops.
         model_name: Gemini model to use.
         interactive_destroy: Whether to prompt (y/n) before destroying the sandbox.
+        event_callback: Optional callable for streaming live events (WebSockets).
 
     Returns:
         dict[str, Any]: Final report containing status, summary, steps taken, and git diff.
@@ -60,12 +62,19 @@ def run_agent_loop(
             console.rule(f"[bold blue]Step {step}/{max_iterations}")
 
             # Print agent's reasoning text if returned
-            if response.text and response.text.strip():
+            thought_text = response.text.strip() if response.text else ""
+            if thought_text:
                 console.print(Panel(
-                    response.text.strip(),
+                    thought_text,
                     title=f"[bold green]Agent Reasoning (Step {step})[/bold green]",
                     border_style="green"
                 ))
+                if event_callback:
+                    event_callback({
+                        "event": "thought",
+                        "step": step,
+                        "content": thought_text
+                    })
 
             # 3. Check if the model invoked any tools
             if not response.function_calls:
@@ -96,12 +105,19 @@ def run_agent_loop(
                 tool_result = execute_tool(container, tool_name, tool_args)
 
                 # Record execution step
-                execution_history.append({
+                step_data = {
                     "step": step,
                     "tool": tool_name,
                     "args": tool_args,
                     "result": tool_result
-                })
+                }
+                execution_history.append(step_data)
+
+                if event_callback:
+                    event_callback({
+                        "event": "tool_execution",
+                        **step_data
+                    })
 
                 # Format response back to Gemini function calling protocol
                 resp_part = types.Part.from_function_response(

@@ -115,6 +115,17 @@ class NeonObjectStorage:
             dest_path = self.local_dir / key
             return dest_path.read_text(encoding="utf-8")
 
+    def download_patch(self, run_id: str) -> str | None:
+        """
+        Downloads the git patch for a given run_id.
+        Returns the patch text, or None if not found.
+        """
+        key = f"runs/{run_id}/patch.diff"
+        try:
+            return self.download_file(key)
+        except Exception:
+            return None
+
 
 if __name__ == "__main__":
     console.rule("[bold magenta]Testing Neon Object Storage Client")

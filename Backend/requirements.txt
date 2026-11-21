@@ -1,6 +1,7 @@
 # Web Framework & Server
 fastapi
 uvicorn[standard]
+httpx
 pydantic
 pydantic-settings
 

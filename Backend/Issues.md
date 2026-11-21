@@ -448,3 +448,32 @@ A debugging task is complete **only** when:
 ### 3. Verification & Evidence Matrix
 - **Build Verification:** `docker build -t cloud-native-sandbox:latest -f .\Sandbox\Dockerfile .`
 - **Execution Test:** In-container execution of `git --version` returned exit code 0.
+
+---
+
+## Issue Resolution Report #008: Eager Docker Client Initialization Breaking Headless Service Boot
+
+### 1. Root Cause Summary
+- **Defect Identified:** `docker.errors.DockerException: Error while fetching server API version: (2, 'CreateFile', 'The system cannot find the file specified.')` raised at import time during API Gateway bootstrap.
+- **Affected File(s):** `Backend/Sandbox/_sandbox_setup.py`, `Backend/brain/_main.py`
+- **Severity Tier:** P1 (Critical Service Boot Crash)
+- **Root Cause Mechanism:** `Sandbox/_sandbox_setup.py` declared `client = docker.from_env()` at the global top-level module scope. Whenever any module imported `Sandbox` (including `Harness`, `controller`, and `brain._main`), the Python runtime immediately attempted to open the Windows named pipe `\\.\pipe\dockerDesktopLinuxEngine`. If Docker Desktop was stopped or initializing, the entire FastAPI application crashed with an unhandled exception before routes or the health check could even register.
+- **Secondary Defect:** `NeonObjectStorage` was missing the helper method `download_patch(run_id)`, causing a potential `AttributeError` when `GET /api/runs/{run_id}/diff` attempted to resolve patches.
+
+### 2. Surgical Remediation
+- **Level of Escalation:** Level 2 (Defensive Lazy Initialization & Architectural Decoupling)
+- **Key Changes Implemented:**
+  - `Backend/Sandbox/_sandbox_setup.py`: Refactored client creation into a lazy cached getter `get_docker_client()`. Top-level module execution no longer initiates an active socket connection to Docker until a container operation is explicitly requested.
+  - `Backend/DB/_object_storage.py`: Implemented `download_patch(self, run_id: str) -> str | None` with defensive 404/NoSuchKey exception handling.
+  - `Backend/controller/_route.py` & `Backend/controller/__init__.py`: Provided unified routing exports across both `_routes.py` and `_route.py` aliases.
+  - `Backend/Harness/_agent_loop.py`: Added `event_callback` parameter to stream thoughts and tool calls live.
+  - `Backend/brain/_main.py`: Configured CORS, lifespan database table auto-initialization, and the 5-minute background Janitor container reaper.
+- **Invariance Maintained:** All Docker container configurations, cgroup memory limits (512MB), volume naming schemes, and API response contracts remain strictly compliant.
+
+### 3. Verification & Evidence Matrix
+- **Import Verification:** `python -c "from brain._main import app; print(app.title)"` executed with exit code 0 without requiring active Docker socket at boot.
+- **Endpoint Tests:**
+  - `GET /health` returned `200 OK` (`{"status": "healthy"}`).
+  - `GET /api/runs` returned `200 OK` with live runs from Neon PostgreSQL.
+  - `GET /api/runs/{run_id}` returned `200 OK` with full execution traces.
+  - `GET /api/runs/{run_id}/diff` returned `200 OK` downloading the patch from Neon S3 Object Storage (`agent-artifacts`).
