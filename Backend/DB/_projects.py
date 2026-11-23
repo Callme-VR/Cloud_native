@@ -195,6 +195,16 @@ async def finalize_agent_run(
     return run
 
 
+async def delete_agent_run(session: AsyncSession, run_id: str) -> bool:
+    """Deletes an agent run and cascades all execution steps."""
+    run = await session.get(AgentRun, run_id)
+    if run:
+        await session.delete(run)
+        await session.commit()
+        return True
+    return False
+
+
 # 4. Self-Test Script
 if __name__ == "__main__":
     import asyncio

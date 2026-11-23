@@ -26,9 +26,13 @@ def get_docker_client() -> docker.DockerClient:
     if _docker_client is None:
         try:
             _docker_client = docker.from_env()
+            _docker_client.ping()
         except Exception as e:
+            _docker_client = None
             console.print(f"[bold red]Failed to connect to Docker daemon: {e}[/bold red]")
-            raise
+            raise RuntimeError(
+                "Docker daemon is not running. Please start Docker Desktop to execute sandbox tasks."
+            ) from e
     return _docker_client
 
 

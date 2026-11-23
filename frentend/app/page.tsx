@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState, useRef, useCallback } from "react";
 import {
   Sparkles,
@@ -23,13 +24,27 @@ import {
   ShieldCheck,
   Server,
   Zap,
+  Send,
+  Plus,
+  SlidersHorizontal,
+  ChevronDown,
+  RefreshCw,
 } from "lucide-react";
-import { LiquidMetalButton } from "@/components/ui/liquid-metal-button";
+
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
-  AIInput,
-  type AIInputMenuItem,
-  type PromptSettingGroup,
-} from "@/components/ui/ai-input";
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
+
 import {
   checkBackendHealth,
   launchAgentRun,
@@ -42,6 +57,7 @@ import {
   getChatSessionDetails,
   sendChatMessage,
   deleteChatSession,
+  deleteAgentRun,
 } from "@/lib/api";
 import type {
   AgentRun,
@@ -52,37 +68,6 @@ import type {
   RunStatus,
   StreamEvent,
 } from "@/types";
-
-// Settings options for AIInput bottom command bar
-const modelSettingGroups: PromptSettingGroup[] = [
-  {
-    id: "model",
-    label: "Model",
-    display: "featured",
-    options: [
-      {
-        value: "gemini-2.5-flash",
-        label: "Gemini 2.5 Flash",
-        description: "Fast sub-second ReAct loop",
-      },
-      {
-        value: "gemini-2.5-pro",
-        label: "Gemini 2.5 Pro",
-        description: "Deep reasoning & architecture analysis",
-      },
-    ],
-  },
-  {
-    id: "effort",
-    label: "Effort",
-    display: "submenu",
-    options: [
-      { value: "high", label: "High (15 iterations)" },
-      { value: "medium", label: "Medium (10 iterations)" },
-      { value: "low", label: "Low (5 iterations)" },
-    ],
-  },
-];
 
 const starterPrompts = [
   {
@@ -118,7 +103,7 @@ export default function CloudNativeDashboard() {
     timestamp?: string;
   }>({ online: false });
 
-  // Agent Runs state
+  // Autonomous Runs
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRunDetail, setSelectedRunDetail] =
@@ -128,22 +113,34 @@ export default function CloudNativeDashboard() {
     Array<{ step: number; content: string }>
   >([]);
   const [liveDiff, setLiveDiff] = useState<string>("");
-  const [currentRunStatus, setCurrentRunStatus] = useState<RunStatus>("PENDING");
+  const [currentRunStatus, setCurrentRunStatus] =
+    useState<RunStatus>("PENDING");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [diffCopied, setDiffCopied] = useState(false);
 
-  // Chat Sessions state
+  // Conversational Chats
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [selectedChatDetail, setSelectedChatDetail] =
     useState<ChatSessionDetail | null>(null);
   const [isSendingChat, setIsSendingChat] = useState(false);
 
-  // UI helpers
-  const [diffCopied, setDiffCopied] = useState(false);
+  // Command Console state
+  const [inputPrompt, setInputPrompt] = useState("");
+  const [selectedModel, setSelectedModel] = useState<
+    "gemini-2.5-flash" | "gemini-2.5-pro"
+  >("gemini-2.5-flash");
+  const [selectedEffort, setSelectedEffort] = useState<
+    "high" | "medium" | "low"
+  >("high");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Sockets & scroll refs
   const activeSocketRef = useRef<WebSocket | null>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // 1. Initial Data Fetching & Health Check
+  // 1. Initial Data Fetching
   const refreshHealth = useCallback(async () => {
     try {
       const health = await checkBackendHealth();
@@ -194,7 +191,6 @@ export default function CloudNativeDashboard() {
       setLiveThoughts([]);
       setLiveDiff("");
 
-      // Close previous WebSocket if open
       if (activeSocketRef.current) {
         activeSocketRef.current.close();
         activeSocketRef.current = null;
@@ -207,12 +203,13 @@ export default function CloudNativeDashboard() {
         setCurrentRunStatus(detail.status);
         if (detail.git_diff) {
           setLiveDiff(detail.git_diff);
-        } else {
+        } else if (detail.status === "COMPLETED") {
           const diffText = await getAgentRunDiff(runId);
           setLiveDiff(diffText);
+        } else {
+          setLiveDiff("");
         }
 
-        // If the run is still RUNNING or PENDING, attach live WebSocket stream
         if (detail.status === "RUNNING" || detail.status === "PENDING") {
           setIsStreaming(true);
           const socket = connectRunStream(
@@ -266,13 +263,54 @@ export default function CloudNativeDashboard() {
     }
   }, []);
 
-  // 4. Handle Launching a New Run from AIInput
+  // 4. Delete Handlers
+  const handleDeleteRun = async (
+    runId: string,
+    e?: React.MouseEvent | React.SyntheticEvent
+  ) => {
+    e?.stopPropagation();
+    try {
+      await deleteAgentRun(runId);
+      setRuns((prev) => prev.filter((r) => r.id !== runId));
+      if (selectedRunId === runId) {
+        setSelectedRunId(null);
+        setSelectedRunDetail(null);
+        setLiveDiff("");
+        setLiveSteps([]);
+        setLiveThoughts([]);
+      }
+    } catch (err) {
+      console.error("Failed to delete agent run:", err);
+    }
+  };
+
+  const handleDeleteChat = async (
+    chatId: string,
+    e?: React.MouseEvent | React.SyntheticEvent
+  ) => {
+    e?.stopPropagation();
+    try {
+      await deleteChatSession(chatId);
+      setChats((prev) => prev.filter((item) => item.id !== chatId));
+      if (selectedChatId === chatId) {
+        setSelectedChatId(null);
+        setSelectedChatDetail(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete chat session:", err);
+    }
+  };
+
+  // 5. Handle Launching Runs
   const handleLaunchRun = async (
     prompt: string,
-    modelName: string = "gemini-2.5-flash",
-    effort: string = "high"
+    modelName: string = selectedModel,
+    effort: string = selectedEffort
   ) => {
-    const maxIterations = effort === "high" ? 15 : effort === "medium" ? 10 : 5;
+    if (!prompt.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    const maxIterations =
+      effort === "high" ? 15 : effort === "medium" ? 10 : 5;
     try {
       const newRun = await launchAgentRun({
         task_prompt: prompt,
@@ -280,19 +318,23 @@ export default function CloudNativeDashboard() {
         max_iterations: maxIterations,
       });
 
-      // Update run list and auto-select
       setRuns((prev) => [newRun, ...prev]);
       setActiveTab("runs");
+      setInputPrompt("");
       await selectRun(newRun.id);
     } catch (err) {
       console.error("Failed to launch agent run:", err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // 5. Handle Sending Chat Message from AIInput
+  // 6. Handle Sending Chat Messages
   const handleSendChat = async (content: string) => {
+    if (!content.trim() || isSendingChat) return;
+    setIsSendingChat(true);
+
     if (!selectedChatId) {
-      // Create new chat session first
       try {
         const newChat = await createChatSession({
           title: content.slice(0, 30) + (content.length > 30 ? "..." : ""),
@@ -300,7 +342,6 @@ export default function CloudNativeDashboard() {
         setChats((prev) => [newChat, ...prev]);
         setSelectedChatId(newChat.id);
 
-        setIsSendingChat(true);
         const reply = await sendChatMessage(newChat.id, content);
         setSelectedChatDetail({
           ...newChat,
@@ -316,145 +357,118 @@ export default function CloudNativeDashboard() {
             reply,
           ],
         });
-        setIsSendingChat(false);
+        setInputPrompt("");
       } catch (err) {
-        console.error("Failed to create & send chat:", err);
+        console.error("Failed to initialize chat session:", err);
+      } finally {
         setIsSendingChat(false);
       }
-      return;
-    }
-
-    // Existing chat
-    try {
-      setIsSendingChat(true);
-      // Optimistic update
-      setSelectedChatDetail((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          messages: [
-            ...prev.messages,
-            {
-              id: `user-${Date.now()}`,
-              session_id: selectedChatId,
-              role: "user",
-              content,
-              metadata_json: {},
-              created_at: new Date().toISOString(),
-            },
-          ],
-        };
-      });
-
-      const reply = await sendChatMessage(selectedChatId, content);
-      setSelectedChatDetail((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          messages: [...prev.messages, reply],
-        };
-      });
-      setIsSendingChat(false);
-    } catch (err) {
-      console.error("Failed to send chat message:", err);
-      setIsSendingChat(false);
-    }
-  };
-
-  // Dispatch from unified AIInput bottom bar
-  const handleInputSubmit = (
-    message: string,
-    meta: { agent: string; settings: Record<string, string> }
-  ) => {
-    const model = meta.settings.model || "gemini-2.5-flash";
-    const effort = meta.settings.effort || "high";
-
-    if (activeTab === "runs") {
-      handleLaunchRun(message, model, effort);
     } else {
-      handleSendChat(message);
+      try {
+        setSelectedChatDetail((prev) =>
+          prev
+            ? {
+                ...prev,
+                messages: [
+                  ...prev.messages,
+                  {
+                    id: "temp-user-" + Date.now(),
+                    session_id: selectedChatId,
+                    role: "user",
+                    content,
+                    metadata_json: {},
+                    created_at: new Date().toISOString(),
+                  },
+                ],
+              }
+            : null
+        );
+        setInputPrompt("");
+
+        const reply = await sendChatMessage(selectedChatId, content);
+        setSelectedChatDetail((prev) =>
+          prev ? { ...prev, messages: [...prev.messages, reply] } : null
+        );
+      } catch (err) {
+        console.error("Failed to append message:", err);
+      } finally {
+        setIsSendingChat(false);
+      }
     }
   };
 
-  const menuItems: AIInputMenuItem[] = [
-    {
-      value: "quick-zerodiv",
-      label: "Fix ZeroDivision in calculator.py",
-      icon: Terminal,
-      shortcut: "⌘1",
-      onClick: () =>
-        handleLaunchRun(starterPrompts[0].prompt, "gemini-2.5-flash", "high"),
-    },
-    {
-      value: "quick-pytest",
-      label: "Generate Pytest Suite",
-      icon: FileCode,
-      shortcut: "⌘2",
-      onClick: () =>
-        handleLaunchRun(starterPrompts[1].prompt, "gemini-2.5-flash", "high"),
-    },
-    { value: "sep-1", type: "separator" },
-    {
-      value: "refresh-runs",
-      label: "Refresh Execution History",
-      icon: RotateCw,
-      onClick: () => {
-        refreshRuns();
-        refreshChats();
-      },
-    },
-  ];
+  // 7. General Submit
+  const handleConsoleSubmit = () => {
+    if (!inputPrompt.trim()) return;
+    if (activeTab === "runs") {
+      handleLaunchRun(inputPrompt);
+    } else {
+      handleSendChat(inputPrompt);
+    }
+  };
 
+  // 8. Auto-scroll on new steps
+  useEffect(() => {
+    stepsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [liveSteps, liveThoughts]);
+
+  // Copy diff helper
   const handleCopyDiff = () => {
-    if (liveDiff) {
-      navigator.clipboard.writeText(liveDiff);
-      setDiffCopied(true);
-      setTimeout(() => setDiffCopied(false), 2000);
-    }
+    if (!liveDiff) return;
+    navigator.clipboard.writeText(liveDiff);
+    setDiffCopied(true);
+    setTimeout(() => setDiffCopied(false), 2000);
   };
 
-  // Filter items based on search query
+  // Filtered lists for search
   const filteredRuns = runs.filter(
     (r) =>
       r.task_prompt.toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const filteredChats = chats.filter(
-    (c) =>
-      c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.id.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredChats = chats.filter((c) =>
+    c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen w-full overflow-hidden bg-background font-sans text-foreground">
       {/* ────────────────────────────────────────────────────────────────── */}
-      {/* 1. SIDEBAR (sidebar-16 layout pattern)                             */}
+      {/* 1. LEFT SIDEBAR: HARDENED CGROUP METRICS & EXECUTION LISTS         */}
       {/* ────────────────────────────────────────────────────────────────── */}
       <aside
-        className={`flex flex-col border-r border-border bg-card/60 backdrop-blur-md transition-all duration-300 ${
+        className={`${
           sidebarOpen ? "w-80" : "w-0 -translate-x-full"
-        } relative z-30 overflow-hidden shrink-0`}
+        } relative flex flex-col border-r border-border bg-card/60 backdrop-blur-md transition-all duration-300 ease-in-out shrink-0 overflow-hidden z-20`}
       >
-        {/* Workspace Brand & Sandbox Resource Spec */}
-        <div className="flex flex-col gap-2 border-b border-border p-4">
+        {/* Brand Header */}
+        <div className="flex flex-col gap-3 p-4 border-b border-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="flex size-8 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20">
-                <Bot className="size-4.5" />
+              <div className="relative size-8 shrink-0 overflow-hidden rounded-xl border border-primary/20 bg-muted/30 shadow-xs flex items-center justify-center">
+                <Image
+                  src="/nativebox-cube-orbit.svg"
+                  alt="Cloud Native Logo"
+                  width={28}
+                  height={28}
+                  className="object-cover"
+                  priority
+                />
               </div>
               <div className="flex flex-col">
-                <span className="font-semibold text-sm tracking-tight">
-                  Lakebase Harness
+                <span className="font-semibold text-sm tracking-tight text-foreground">
+                  Cloud Native
                 </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Cloud-Native Sandbox
+                <span className="text-[10px] text-muted-foreground uppercase tracking-widest">
+                  Autonomous Sandbox
                 </span>
               </div>
             </div>
-            {/* Quick Action Button using LiquidMetalButton (icon mode) */}
-            <LiquidMetalButton
-              viewMode="icon"
+
+            {/* Quick Action Button using shadcn Button */}
+            <Button
+              variant="outline"
+              size="icon-xs"
               onClick={() => {
                 if (activeTab === "runs") {
                   setSelectedRunId(null);
@@ -466,20 +480,23 @@ export default function CloudNativeDashboard() {
                   });
                 }
               }}
-            />
+              title="New Item"
+            >
+              <Plus className="size-3.5" />
+            </Button>
           </div>
 
-          {/* Hardened Cgroup Badges */}
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted/60 p-1.5 text-[10px] text-muted-foreground border border-border/40">
-            <div className="flex items-center gap-1">
-              <Cpu className="size-3 text-brand" />
-              <span>1.0 Core</span>
+          {/* Hardened Cgroup Badges using shadcn Badge */}
+          <div className="grid grid-cols-3 gap-1 rounded-md bg-muted/50 p-1.5 text-[10px] text-muted-foreground border border-border/40">
+            <div className="flex items-center justify-center gap-1 font-mono">
+              <Cpu className="size-3 text-sky-400" />
+              <span>1.0 CPU</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center justify-center gap-1 font-mono">
               <ShieldCheck className="size-3 text-emerald-400" />
               <span>512 MB</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center justify-center gap-1 font-mono">
               <Layers className="size-3 text-purple-400" />
               <span>64 PIDs</span>
             </div>
@@ -487,47 +504,50 @@ export default function CloudNativeDashboard() {
         </div>
 
         {/* Tab Switcher: Autonomous Runs vs Multi-Turn Chats */}
-        <div className="flex border-b border-border bg-muted/30 p-1.5">
-          <button
+        <div className="flex border-b border-border bg-muted/20 p-1 gap-1">
+          <Button
+            variant={activeTab === "runs" ? "default" : "ghost"}
+            size="xs"
+            className="flex-1 justify-center rounded-sm text-[11px]"
             onClick={() => setActiveTab("runs")}
-            className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-colors ${
-              activeTab === "runs"
-                ? "bg-card text-foreground shadow-sm border border-border/60"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
           >
-            <Terminal className="size-3.5" />
+            <Terminal className="size-3" />
             <span>Sandbox Runs</span>
-            <span className="ml-1 rounded-full bg-muted px-1.5 py-0.2 text-[10px] font-semibold">
+            <Badge
+              variant="secondary"
+              className="ml-1 px-1 py-0 text-[9px] bg-background/50"
+            >
               {runs.length}
-            </span>
-          </button>
-          <button
+            </Badge>
+          </Button>
+
+          <Button
+            variant={activeTab === "chats" ? "default" : "ghost"}
+            size="xs"
+            className="flex-1 justify-center rounded-sm text-[11px]"
             onClick={() => setActiveTab("chats")}
-            className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-colors ${
-              activeTab === "chats"
-                ? "bg-card text-foreground shadow-sm border border-border/60"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
           >
-            <MessageSquare className="size-3.5" />
+            <MessageSquare className="size-3" />
             <span>Chats</span>
-            <span className="ml-1 rounded-full bg-muted px-1.5 py-0.2 text-[10px] font-semibold">
+            <Badge
+              variant="secondary"
+              className="ml-1 px-1 py-0 text-[9px] bg-background/50"
+            >
               {chats.length}
-            </span>
-          </button>
+            </Badge>
+          </Button>
         </div>
 
-        {/* Search input */}
+        {/* Search input using shadcn Input */}
         <div className="p-3 border-b border-border">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
-            <input
+            <Input
               type="text"
               placeholder={`Search ${activeTab}...`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg bg-muted/50 border border-border/50 pl-8 pr-3 py-1.5 text-xs outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/40 text-foreground placeholder:text-muted-foreground"
+              className="w-full pl-8 pr-3 text-xs h-8 border-b-border"
             />
           </div>
         </div>
@@ -543,13 +563,13 @@ export default function CloudNativeDashboard() {
               filteredRuns.map((r) => {
                 const isSelected = selectedRunId === r.id;
                 return (
-                  <button
+                  <div
                     key={r.id}
                     onClick={() => selectRun(r.id)}
-                    className={`w-full text-left rounded-xl p-2.5 transition-all text-xs border ${
+                    className={`group relative flex flex-col w-full text-left rounded-md p-2.5 transition-all text-xs border cursor-pointer ${
                       isSelected
-                        ? "bg-primary/10 border-brand/50 shadow-sm"
-                        : "hover:bg-accent/50 border-transparent text-muted-foreground hover:text-foreground"
+                        ? "bg-primary/10 border-primary/50 shadow-xs"
+                        : "hover:bg-muted/50 border-transparent text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-1 mb-1">
@@ -559,9 +579,9 @@ export default function CloudNativeDashboard() {
                             r.status === "COMPLETED"
                               ? "bg-emerald-400"
                               : r.status === "RUNNING"
-                              ? "bg-brand animate-pulse"
+                              ? "bg-sky-400 animate-pulse"
                               : r.status === "FAILED"
-                              ? "bg-red-400"
+                              ? "bg-rose-400"
                               : "bg-amber-400"
                           }`}
                         />
@@ -569,17 +589,26 @@ export default function CloudNativeDashboard() {
                           {r.id.slice(0, 8)}
                         </span>
                       </div>
-                      <span className="text-[10px] opacity-60">
-                        {new Date(r.created_at).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] opacity-60">
+                          {new Date(r.created_at).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                        <button
+                          onClick={(e) => handleDeleteRun(r.id, e)}
+                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-rose-400 text-muted-foreground transition-opacity"
+                          title="Delete Run"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </div>
                     </div>
-                    <p className="line-clamp-2 text-foreground/90 font-medium leading-relaxed">
+                    <p className="line-clamp-2 text-foreground/90 font-medium leading-relaxed pr-2">
                       {r.task_prompt}
                     </p>
-                  </button>
+                  </div>
                 );
               })
             )
@@ -594,10 +623,10 @@ export default function CloudNativeDashboard() {
                 <div
                   key={c.id}
                   onClick={() => selectChat(c.id)}
-                  className={`group flex items-center justify-between w-full rounded-xl p-2.5 transition-all text-xs border cursor-pointer ${
+                  className={`group flex items-center justify-between w-full rounded-md p-2.5 transition-all text-xs border cursor-pointer ${
                     isSelected
-                      ? "bg-primary/10 border-brand/50 text-foreground"
-                      : "hover:bg-accent/50 border-transparent text-muted-foreground hover:text-foreground"
+                      ? "bg-primary/10 border-primary/50 text-foreground"
+                      : "hover:bg-muted/50 border-transparent text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate">
@@ -605,20 +634,11 @@ export default function CloudNativeDashboard() {
                     <span className="truncate font-medium">{c.title}</span>
                   </div>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteChatSession(c.id).then(() => {
-                        setChats((prev) => prev.filter((item) => item.id !== c.id));
-                        if (selectedChatId === c.id) {
-                          setSelectedChatId(null);
-                          setSelectedChatDetail(null);
-                        }
-                      });
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
+                    onClick={(e) => handleDeleteChat(c.id, e)}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-rose-400 text-muted-foreground transition-opacity"
                     title="Delete Chat"
                   >
-                    <Trash2 className="size-3.5" />
+                    <Trash2 className="size-3" />
                   </button>
                 </div>
               );
@@ -628,43 +648,57 @@ export default function CloudNativeDashboard() {
 
         {/* Sidebar Footer with Trigger Button */}
         <div className="border-t border-border p-3 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
             <Server className="size-3.5" />
             <span>FastAPI Uvicorn</span>
           </div>
-          <LiquidMetalButton
-            label="New Run"
+          <Button
+            size="xs"
+            variant="default"
             onClick={() => {
               setSelectedRunId(null);
               setSelectedRunDetail(null);
               setActiveTab("runs");
             }}
-          />
+          >
+            <Plus className="size-3" />
+            <span>New Run</span>
+          </Button>
         </div>
       </aside>
 
       {/* ────────────────────────────────────────────────────────────────── */}
-      {/* 2. MAIN VIEWPORT WITH STICKY SITE HEADER                           */}
+      {/* 2. MAIN WORKSPACE AREA                                             */}
       {/* ────────────────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 flex-col h-full overflow-hidden">
-        {/* STICKY SITE HEADER (sidebar-16 style) */}
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-border bg-card/80 backdrop-blur-md px-4">
+      <div className="flex flex-1 flex-col overflow-hidden bg-background">
+        {/* Top Navigation Bar */}
+        <header className="flex h-14 items-center justify-between border-b border-border bg-card/40 px-4 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-3">
-            <button
+            <Button
+              variant="outline"
+              size="icon-xs"
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
               title="Toggle Sidebar"
             >
               <ChevronRight
-                className={`size-4 transition-transform duration-200 ${
+                className={`size-3.5 transition-transform duration-200 ${
                   sidebarOpen ? "rotate-180" : ""
                 }`}
               />
-            </button>
+            </Button>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="relative size-6 shrink-0 overflow-hidden rounded-md border border-border/60">
+                <Image
+                  src="/nativebox-cube-orbit.svg"
+                  alt="Cloud Native Logo"
+                  width={24}
+                  height={24}
+                  className="object-cover"
+                />
+              </div>
               <span className="font-semibold text-sm tracking-tight text-foreground">
-                Cloud-Native AI Harness
+                Cloud Native
               </span>
               <span className="text-muted-foreground/60 text-xs font-mono">/</span>
               <span className="text-xs text-muted-foreground font-mono">
@@ -678,42 +712,46 @@ export default function CloudNativeDashboard() {
           </div>
 
           {/* Right Header: Server Health Badge, Model Indicator & Quick Launch */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {/* Backend connection pill */}
             <div
-              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs border ${
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs border ${
                 backendStatus.online
                   ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : "bg-red-500/10 text-red-400 border-red-500/30"
+                  : "bg-rose-500/10 text-rose-400 border-rose-500/30"
               }`}
             >
               <span
                 className={`size-1.5 rounded-full ${
-                  backendStatus.online ? "bg-emerald-400" : "bg-red-400"
+                  backendStatus.online ? "bg-emerald-400" : "bg-rose-400"
                 }`}
               />
-              <span className="font-medium text-[11px]">
+              <span className="font-medium text-[11px] font-mono">
                 {backendStatus.online
-                  ? `Backend Live (${backendStatus.latencyMs}ms)`
-                  : "Backend Offline"}
+                  ? `Live (${backendStatus.latencyMs}ms)`
+                  : "Offline"}
               </span>
             </div>
 
             {/* Model Badge */}
-            <div className="hidden sm:flex items-center gap-1 rounded-full bg-muted/60 border border-border px-2.5 py-1 text-[11px] text-muted-foreground font-medium">
-              <Sparkles className="size-3 text-brand" />
-              <span>Gemini 2.5 Flash</span>
+            <div className="hidden sm:flex items-center gap-1 rounded-full bg-muted/60 border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground font-mono">
+              <Sparkles className="size-3 text-sky-400" />
+              <span>{selectedModel}</span>
             </div>
 
-            {/* Header Action Button using LiquidMetalButton */}
-            <LiquidMetalButton
-              label="Launch Task"
+            {/* Header Action Button using shadcn Button */}
+            <Button
+              size="xs"
+              variant="default"
               onClick={() => {
                 setSelectedRunId(null);
                 setSelectedRunDetail(null);
                 setActiveTab("runs");
               }}
-            />
+            >
+              <Terminal className="size-3" />
+              <span>Launch Task</span>
+            </Button>
           </div>
         </header>
 
@@ -725,19 +763,19 @@ export default function CloudNativeDashboard() {
             selectedRunId && selectedRunDetail ? (
               /* ACTIVE RUN DETAIL VIEW */
               <div className="mx-auto max-w-4xl space-y-6">
-                {/* Run Metadata Header */}
-                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm space-y-3">
+                {/* Run Metadata Header Card */}
+                <Card className="rounded-xl border border-border bg-card p-5 shadow-xs space-y-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span
-                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
+                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider font-mono ${
                             currentRunStatus === "COMPLETED"
                               ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
                               : currentRunStatus === "RUNNING"
                               ? "bg-sky-500/20 text-sky-400 border border-sky-500/30 animate-pulse"
                               : currentRunStatus === "FAILED"
-                              ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                              ? "bg-rose-500/20 text-rose-400 border border-rose-500/30"
                               : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
                           }`}
                         >
@@ -753,36 +791,53 @@ export default function CloudNativeDashboard() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <LiquidMetalButton
-                        viewMode="icon"
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        onClick={() => handleDeleteRun(selectedRunDetail.id)}
+                        className="rounded-md"
+                        title="Delete Task"
+                      >
+                        <Trash2 className="size-3" />
+                        <span>Delete Task</span>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon-xs"
                         onClick={() => selectRun(selectedRunDetail.id)}
-                      />
+                        title="Refresh Run"
+                      >
+                        <RefreshCw className="size-3" />
+                      </Button>
                     </div>
                   </div>
 
                   {selectedRunDetail.summary && (
-                    <div className="rounded-xl bg-muted/60 border border-border/40 p-3 text-xs text-foreground/80 leading-relaxed">
+                    <div className="rounded-md bg-muted/60 border border-border/40 p-3 text-xs text-foreground/80 leading-relaxed">
                       <span className="font-semibold text-foreground">
                         Agent Conclusion:{" "}
                       </span>
                       {selectedRunDetail.summary}
                     </div>
                   )}
-                </div>
+                </Card>
 
                 {/* Execution Trace Stepper */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="font-semibold text-sm flex items-center gap-2 text-foreground">
-                      <Terminal className="size-4 text-brand" />
+                      <Terminal className="size-4 text-sky-400" />
                       <span>ReAct Execution Trace</span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground font-mono">
+                      <Badge
+                        variant="secondary"
+                        className="px-2 py-0 text-xs font-mono"
+                      >
                         {liveSteps.length} step(s)
-                      </span>
+                      </Badge>
                     </h3>
 
                     {isStreaming && (
-                      <div className="flex items-center gap-1.5 text-xs text-brand animate-pulse">
+                      <div className="flex items-center gap-1.5 text-xs text-sky-400 animate-pulse font-mono">
                         <Zap className="size-3.5" />
                         <span>Live WebSocket Streaming...</span>
                       </div>
@@ -795,9 +850,9 @@ export default function CloudNativeDashboard() {
                       {liveThoughts.map((t, idx) => (
                         <div
                           key={idx}
-                          className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 text-xs text-foreground/90 space-y-1"
+                          className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3.5 text-xs text-foreground/90 space-y-1"
                         >
-                          <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-[11px]">
+                          <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-[11px] font-mono">
                             <Sparkles className="size-3" />
                             <span>Agent Reasoning (Step {t.step})</span>
                           </div>
@@ -812,35 +867,36 @@ export default function CloudNativeDashboard() {
                   {/* Step Cards */}
                   <div className="space-y-3">
                     {liveSteps.map((step) => (
-                      <div
+                      <Card
                         key={step.step_number}
-                        className="rounded-xl border border-border bg-card p-4 space-y-2.5 transition-all shadow-xs"
+                        className="rounded-lg border border-border bg-card p-4 space-y-2.5 transition-all shadow-xs"
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <span className="flex size-5 items-center justify-center rounded-full bg-brand/10 text-brand text-[11px] font-bold">
+                            <span className="flex size-5 items-center justify-center rounded-full bg-primary/10 text-primary text-[11px] font-bold font-mono">
                               {step.step_number}
                             </span>
-                            <span className="font-mono text-xs font-semibold text-foreground bg-muted px-2 py-0.5 rounded-md border border-border/50">
+                            <span className="font-mono text-xs font-semibold text-foreground bg-muted px-2 py-0.5 rounded-sm border border-border/50">
                               {step.tool_name}
                             </span>
                           </div>
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-[11px] text-muted-foreground font-mono">
                             {new Date(step.created_at).toLocaleTimeString()}
                           </span>
                         </div>
 
                         {/* Tool Arguments */}
-                        {step.tool_args && Object.keys(step.tool_args).length > 0 && (
-                          <div className="rounded-lg bg-black/40 border border-border/40 p-2.5 font-mono text-[11px] text-zinc-300 overflow-x-auto">
-                            <span className="text-zinc-500 select-none">$ args: </span>
-                            {JSON.stringify(step.tool_args, null, 2)}
-                          </div>
-                        )}
+                        {step.tool_args &&
+                          Object.keys(step.tool_args).length > 0 && (
+                            <div className="rounded-md bg-black/40 border border-border/40 p-2.5 font-mono text-[11px] text-zinc-300 overflow-x-auto">
+                              <span className="text-zinc-500 select-none">$ args: </span>
+                              {JSON.stringify(step.tool_args, null, 2)}
+                            </div>
+                          )}
 
                         {/* Tool Result */}
                         {step.tool_result && (
-                          <div className="rounded-lg bg-black/60 border border-border/50 p-2.5 font-mono text-[11px] text-zinc-200 overflow-x-auto">
+                          <div className="rounded-md bg-black/60 border border-border/50 p-2.5 font-mono text-[11px] text-zinc-200 overflow-x-auto">
                             <span className="text-zinc-500 select-none"># output: </span>
                             {typeof step.tool_result.content === "string" ? (
                               <pre className="whitespace-pre-wrap">
@@ -861,7 +917,7 @@ export default function CloudNativeDashboard() {
                             )}
                           </div>
                         )}
-                      </div>
+                      </Card>
                     ))}
                     <div ref={stepsEndRef} />
                   </div>
@@ -875,9 +931,10 @@ export default function CloudNativeDashboard() {
                         <Code2 className="size-4 text-purple-400" />
                         <span>Generated Unified Git Patch Diff</span>
                       </h3>
-                      <button
+                      <Button
+                        variant="outline"
+                        size="xs"
                         onClick={handleCopyDiff}
-                        className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/60"
                       >
                         {diffCopied ? (
                           <>
@@ -890,10 +947,10 @@ export default function CloudNativeDashboard() {
                             <span>Copy Diff</span>
                           </>
                         )}
-                      </button>
+                      </Button>
                     </div>
 
-                    <div className="rounded-xl border border-purple-500/30 bg-black/80 p-4 font-mono text-xs overflow-x-auto shadow-inner">
+                    <div className="rounded-lg border border-purple-500/30 bg-black/80 p-4 font-mono text-xs overflow-x-auto shadow-inner">
                       {liveDiff.split("\n").map((line, i) => (
                         <div
                           key={i}
@@ -905,7 +962,7 @@ export default function CloudNativeDashboard() {
                               : line.startsWith("@@")
                               ? "text-purple-400 font-bold"
                               : "text-zinc-300"
-                          } px-1.5 rounded-sm`}
+                          } px-1.5 rounded-xs`}
                         >
                           {line}
                         </div>
@@ -917,39 +974,46 @@ export default function CloudNativeDashboard() {
             ) : (
               /* EMPTY STATE / STARTER DASHBOARD */
               <div className="mx-auto max-w-2xl py-8 space-y-8">
-                <div className="text-center space-y-3">
-                  <div className="inline-flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary border border-primary/20 shadow-lg">
-                    <Bot className="size-7" />
+                <div className="text-center space-y-4">
+                  <div className="relative mx-auto size-20 overflow-hidden rounded-2xl border border-primary/30 shadow-xl flex items-center justify-center bg-card">
+                    <Image
+                      src="/nativebox-cube-orbit.svg"
+                      alt="Cloud Native Logo"
+                      width={64}
+                      height={64}
+                      className="object-cover"
+                      priority
+                    />
                   </div>
                   <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-                    Autonomous Cloud-Native Coding Agent
+                    Cloud Native
                   </h1>
                   <p className="text-sm text-muted-foreground max-w-lg mx-auto leading-relaxed">
-                    Dispatches closed-loop ReAct reasoning agents into hardened,
-                    air-gapped Docker sandboxes. Edits files, executes unit tests, and
-                    delivers verified unified git diffs in seconds.
+                    Autonomous AI coding harness executing multi-turn ReAct reasoning
+                    loops inside hardened, air-gapped Docker sandboxes with live
+                    telemetry and Neon persistence.
                   </p>
                 </div>
 
-                {/* Starter Task Cards */}
+                {/* Starter Task Cards using shadcn Card */}
                 <div className="space-y-3">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground font-mono">
                     Recommended Tasks
                   </h3>
                   <div className="grid gap-3 sm:grid-cols-3">
                     {starterPrompts.map((item, idx) => (
-                      <div
+                      <Card
                         key={idx}
-                        className="group flex flex-col justify-between rounded-xl border border-border bg-card p-4 hover:border-brand/50 transition-all cursor-pointer shadow-xs"
+                        className="group flex flex-col justify-between rounded-lg border border-border bg-card p-4 hover:border-primary/50 transition-all cursor-pointer shadow-xs"
                         onClick={() =>
-                          handleLaunchRun(item.prompt, "gemini-2.5-flash", "high")
+                          handleLaunchRun(item.prompt, selectedModel, selectedEffort)
                         }
                       >
-                        <div className="space-y-1.5">
-                          <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-semibold text-brand">
+                        <div className="space-y-2">
+                          <Badge variant="secondary" className="text-[10px]">
                             {item.category}
-                          </span>
-                          <h4 className="font-semibold text-xs text-foreground group-hover:text-brand transition-colors">
+                          </Badge>
+                          <h4 className="font-semibold text-xs text-foreground group-hover:text-primary transition-colors">
                             {item.title}
                           </h4>
                           <p className="text-[11px] text-muted-foreground line-clamp-3 leading-relaxed">
@@ -957,9 +1021,11 @@ export default function CloudNativeDashboard() {
                           </p>
                         </div>
                         <div className="pt-3 flex items-center justify-end">
-                          <LiquidMetalButton viewMode="icon" />
+                          <Button size="icon-xs" variant="ghost">
+                            <Play className="size-3 text-primary" />
+                          </Button>
                         </div>
-                      </div>
+                      </Card>
                     ))}
                   </div>
                 </div>
@@ -968,17 +1034,17 @@ export default function CloudNativeDashboard() {
           ) : (
             /* CONVERSATIONAL CHAT VIEW */
             <div className="mx-auto max-w-3xl space-y-4">
-              <div className="rounded-xl border border-border bg-card p-3 flex items-center justify-between">
+              <Card className="rounded-lg border border-border bg-card p-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <MessageSquare className="size-4 text-brand" />
+                  <MessageSquare className="size-4 text-sky-400" />
                   <span className="font-semibold text-sm">
                     {selectedChatDetail?.title || "Conversational Memory Thread"}
                   </span>
                 </div>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[11px] text-muted-foreground font-mono">
                   Saved in Neon PostgreSQL
                 </span>
-              </div>
+              </Card>
 
               {/* Chat Message Stream */}
               <div className="space-y-3 pb-8">
@@ -990,9 +1056,9 @@ export default function CloudNativeDashboard() {
                     }`}
                   >
                     <div
-                      className={`max-w-[80%] rounded-2xl p-4 text-xs leading-relaxed space-y-1.5 ${
+                      className={`max-w-[80%] rounded-xl p-4 text-xs leading-relaxed space-y-1.5 ${
                         msg.role === "user"
-                          ? "bg-brand/15 border border-brand/30 text-foreground"
+                          ? "bg-primary/15 border border-primary/30 text-foreground"
                           : "bg-card border border-border text-foreground shadow-xs"
                       }`}
                     >
@@ -1000,13 +1066,23 @@ export default function CloudNativeDashboard() {
                         {msg.role === "user" ? (
                           <span>You</span>
                         ) : (
-                          <div className="flex items-center gap-1 text-brand">
-                            <Bot className="size-3" />
-                            <span>Gemini Assistant</span>
+                          <div className="flex items-center gap-1.5 text-primary">
+                            <div className="relative size-3.5 shrink-0 overflow-hidden rounded-full border border-primary/40">
+                              <Image
+                                src="/nativebox-cube-orbit.svg"
+                                alt="Cloud Native"
+                                width={14}
+                                height={14}
+                                className="object-cover"
+                              />
+                            </div>
+                            <span>Cloud Native Assistant</span>
                           </div>
                         )}
                         <span>•</span>
-                        <span>{new Date(msg.created_at).toLocaleTimeString()}</span>
+                        <span className="font-mono">
+                          {new Date(msg.created_at).toLocaleTimeString()}
+                        </span>
                       </div>
                       <p className="whitespace-pre-wrap">{msg.content}</p>
                     </div>
@@ -1015,10 +1091,10 @@ export default function CloudNativeDashboard() {
 
                 {isSendingChat && (
                   <div className="flex justify-start">
-                    <div className="flex items-center gap-2 rounded-2xl bg-card border border-border p-4 text-xs text-muted-foreground">
-                      <Sparkles className="size-4 text-brand animate-spin" />
+                    <Card className="flex items-center gap-2 rounded-xl bg-card border border-border p-4 text-xs text-muted-foreground">
+                      <Sparkles className="size-4 text-primary animate-spin" />
                       <span>Gemini is generating response...</span>
-                    </div>
+                    </Card>
                   </div>
                 )}
               </div>
@@ -1027,20 +1103,124 @@ export default function CloudNativeDashboard() {
         </main>
 
         {/* ────────────────────────────────────────────────────────────────── */}
-        {/* 4. BOTTOM COMMAND INPUT BAR (AIInput)                              */}
+        {/* 4. BOTTOM COMMAND CONSOLE USING SHADCN COMPONENTS                  */}
         {/* ────────────────────────────────────────────────────────────────── */}
-        <div className="border-t border-border bg-card/80 backdrop-blur-md p-3 sm:p-4">
-          <div className="mx-auto max-w-3xl">
-            <AIInput
-              settingGroups={modelSettingGroups}
-              menuItems={menuItems}
-              placeholder={
-                activeTab === "runs"
-                  ? "Describe a task or bug to fix in the isolated sandbox..."
-                  : "Message conversational agent..."
-              }
-              onSend={handleInputSubmit}
-            />
+        <div className="border-t border-border bg-card/70 backdrop-blur-md p-3 sm:p-4">
+          <div className="mx-auto max-w-3xl space-y-2">
+            {/* Input Container */}
+            <div className="relative rounded-lg border border-border bg-background/80 shadow-xs focus-within:border-primary/60 transition-colors p-2.5">
+              <Textarea
+                ref={textareaRef}
+                value={inputPrompt}
+                onChange={(e) => setInputPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    handleConsoleSubmit();
+                  }
+                }}
+                placeholder={
+                  activeTab === "runs"
+                    ? "Describe a coding task, bug fix, or test to execute in the isolated Docker sandbox... (Ctrl+Enter to run)"
+                    : "Message conversational memory agent... (Ctrl+Enter to send)"
+                }
+                className="w-full text-xs min-h-[60px] max-h-[160px] bg-transparent resize-none border-0 focus-visible:ring-0 p-0 shadow-none"
+              />
+
+              {/* Console Toolbar */}
+              <div className="flex items-center justify-between pt-2 border-t border-border/40 text-xs">
+                {/* Model & Effort Selector Pills */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Model Toggle */}
+                  <div className="flex items-center rounded-sm bg-muted/60 p-0.5 border border-border/50 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedModel("gemini-2.5-flash")}
+                      className={`px-2 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
+                        selectedModel === "gemini-2.5-flash"
+                          ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Flash 2.5
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedModel("gemini-2.5-pro")}
+                      className={`px-2 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
+                        selectedModel === "gemini-2.5-pro"
+                          ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Pro 2.5
+                    </button>
+                  </div>
+
+                  {/* Effort Toggle */}
+                  <div className="flex items-center rounded-sm bg-muted/60 p-0.5 border border-border/50 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEffort("high")}
+                      className={`px-1.5 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
+                        selectedEffort === "high"
+                          ? "bg-secondary text-secondary-foreground font-semibold shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      title="15 Iterations"
+                    >
+                      High
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEffort("medium")}
+                      className={`px-1.5 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
+                        selectedEffort === "medium"
+                          ? "bg-secondary text-secondary-foreground font-semibold shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      title="10 Iterations"
+                    >
+                      Med
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEffort("low")}
+                      className={`px-1.5 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
+                        selectedEffort === "low"
+                          ? "bg-secondary text-secondary-foreground font-semibold shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      title="5 Iterations"
+                    >
+                      Low
+                    </button>
+                  </div>
+                </div>
+
+                {/* Submit Action Button using shadcn Button */}
+                <div className="flex items-center gap-2">
+                  <span className="hidden sm:inline text-[10px] text-muted-foreground font-mono">
+                    ⌘+Enter
+                  </span>
+                  <Button
+                    size="xs"
+                    variant="default"
+                    onClick={handleConsoleSubmit}
+                    isDisabled={!inputPrompt.trim() || isSubmitting || isSendingChat}
+                  >
+                    {isSubmitting || isSendingChat ? (
+                      <RefreshCw className="size-3 animate-spin" />
+                    ) : (
+                      <Send className="size-3" />
+                    )}
+                    <span>
+                      {activeTab === "runs" ? "Run Task" : "Send Message"}
+                    </span>
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

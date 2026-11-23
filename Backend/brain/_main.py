@@ -29,10 +29,16 @@ async def janitor_reaper(interval_seconds: int = 300, max_age_seconds: int = 600
     Runs every 5 minutes to detect and reap zombie/orphaned 'agent-sandbox-*'
     containers running longer than max_age_seconds.
     """
-    client = docker.from_env()
+    from Sandbox._sandbox_setup import get_docker_client
     while True:
         try:
             await asyncio.sleep(interval_seconds)
+            try:
+                client = get_docker_client()
+            except Exception:
+                # Docker daemon is offline; skip this cycle gracefully
+                continue
+
             console.print("[dim cyan]Janitor Reaper: Scanning for expired sandboxes...[/dim cyan]")
 
             containers = client.containers.list(all=True)
@@ -57,7 +63,7 @@ async def janitor_reaper(interval_seconds: int = 300, max_age_seconds: int = 600
             console.print("[dim yellow]Janitor Reaper stopped.[/dim yellow]")
             break
         except Exception as err:
-            console.print(f"[red]Janitor Reaper error: {err}[/red]")
+            console.print(f"[dim yellow]Janitor Reaper skipped: {err}[/dim yellow]")
 
 
 @asynccontextmanager
@@ -85,7 +91,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title="Cloud-Native AI Coding Harness",
+    title="Cloud Native",
     description="Autonomous ReAct sandbox orchestration and real-time execution streaming.",
     version="1.0.0",
     lifespan=lifespan

@@ -24,6 +24,7 @@ from DB import (
     create_agent_run,
     record_execution_step,
     finalize_agent_run,
+    delete_agent_run,
     AgentRun,
     ExecutionStep,
     AsyncSessionLocal,
@@ -218,19 +219,22 @@ def _execute_agent_background(
         asyncio.run_coroutine_threadsafe(_finalize(), loop)
 
     except Exception as e:
-        console.print(f"[bold red]Background run {run_id} failed: {e}[/bold red]")
+        error_msg = str(e)
+        if "CreateFile" in error_msg or "docker" in error_msg.lower():
+            error_msg = "Docker daemon is offline. Please launch Docker Desktop to execute sandbox tasks."
+        console.print(f"[bold red]Background run {run_id} failed: {error_msg}[/bold red]")
         async def _record_failure():
             async with AsyncSessionLocal() as session:
                 await finalize_agent_run(
                     session=session,
                     run_id=run_id,
                     status="FAILED",
-                    summary=f"Execution error: {str(e)}"
+                    summary=f"Execution error: {error_msg}"
                 )
             await manager.broadcast(run_id, {
                 "event": "finish",
                 "status": "FAILED",
-                "summary": f"Execution failed: {str(e)}"
+                "summary": f"Execution failed: {error_msg}"
             })
         asyncio.run_coroutine_threadsafe(_record_failure(), loop)
 
@@ -329,12 +333,34 @@ async def get_run_details(run_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @api_router.get("/runs/{run_id}/diff")
-async def get_run_diff(run_id: str):
-    """Downloads the generated patch file from Neon Object Storage."""
+async def get_run_diff(run_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Downloads the generated patch file from Neon Object Storage,
+    or falls back to database record if available. Returns an empty patch if none yet.
+    """
+    run = await db.get(AgentRun, run_id)
+    if not run:
+        return {"run_id": run_id, "patch": ""}
+
     diff_text = storage.download_patch(run_id)
-    if not diff_text:
-        raise HTTPException(status_code=404, detail="No patch found for this run.")
-    return {"run_id": run_id, "patch": diff_text}
+    if not diff_text and run.git_diff:
+        diff_text = run.git_diff
+
+    return {"run_id": run_id, "patch": diff_text or ""}
+
+
+@api_router.delete("/runs/{run_id}", tags=["Agent Runs"])
+async def delete_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    """Deletes an agent run, its recorded execution steps, and any stored patch artifacts."""
+    success = await delete_agent_run(session=db, run_id=run_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    storage.delete_patch(run_id)
+    return {
+        "message": "Agent run and execution steps deleted successfully",
+        "id": run_id
+    }
 
 
 # 5. WebSocket Real-Time Channel

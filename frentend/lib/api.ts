@@ -92,16 +92,31 @@ export async function getAgentRunDetails(runId: string): Promise<AgentRunDetail>
 }
 
 export async function getAgentRunDiff(runId: string): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/runs/${runId}/diff`, {
-    cache: "no-store",
-  });
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/runs/${runId}/diff`, {
+      cache: "no-store",
+    });
 
-  if (!res.ok) {
+    if (!res.ok) {
+      return "";
+    }
+
+    const data = await res.json();
+    return data.patch || "";
+  } catch {
     return "";
   }
+}
 
-  const data = await res.json();
-  return data.patch || "";
+export async function deleteAgentRun(runId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/runs/${runId}`, {
+      method: "DELETE",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

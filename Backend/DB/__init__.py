@@ -15,6 +15,7 @@ from ._projects import (
     create_agent_run,
     record_execution_step,
     finalize_agent_run,
+    delete_agent_run,
 )
 from ._chat import (
     ChatSession,
@@ -40,6 +41,7 @@ __all__ = [
     "create_agent_run",
     "record_execution_step",
     "finalize_agent_run",
+    "delete_agent_run",
     "ChatSession",
     "ChatMessage",
     "create_chat_session",

@@ -126,6 +126,27 @@ class NeonObjectStorage:
         except Exception:
             return None
 
+    def delete_patch(self, run_id: str) -> bool:
+        """
+        Deletes patch diff and terminal logs for a given run_id.
+        """
+        key_patch = f"runs/{run_id}/patch.diff"
+        key_log = f"runs/{run_id}/terminal.log"
+        try:
+            if self.use_cloud:
+                self.s3_client.delete_object(Bucket=self.bucket_name, Key=key_patch)
+                self.s3_client.delete_object(Bucket=self.bucket_name, Key=key_log)
+            else:
+                dest_patch = self.local_dir / key_patch
+                if dest_patch.exists():
+                    dest_patch.unlink()
+                dest_log = self.local_dir / key_log
+                if dest_log.exists():
+                    dest_log.unlink()
+            return True
+        except Exception:
+            return False
+
 
 if __name__ == "__main__":
     console.rule("[bold magenta]Testing Neon Object Storage Client")
