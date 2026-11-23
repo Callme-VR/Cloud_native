@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from dotenv import load_dotenv
 from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -26,12 +27,37 @@ from rich.console import Console
 load_dotenv()
 console = Console()
 
-# 1. Database Connection Configuration
-DATABASE_URL = os.getenv("DATABASE_URL")
+def normalize_database_url(url: str | None) -> str:
+    """
+    Normalizes a Neon or PostgreSQL connection string for SQLAlchemy + asyncpg.
+    - Ensures driver scheme is 'postgresql+asyncpg'.
+    - Maps 'sslmode=require' to 'ssl=require'.
+    - Strips query parameters unsupported by asyncpg (e.g. 'channel_binding').
+    """
+    if not url:
+        return "sqlite+aiosqlite:///./sandbox_dev.db"
 
-if not DATABASE_URL:
-    console.print("[yellow]⚠ DATABASE_URL not set in .env. Falling back to local SQLite for testing.[/yellow]")
-    DATABASE_URL = "sqlite+aiosqlite:///./sandbox_dev.db"
+    parsed = urlparse(url)
+    scheme = parsed.scheme
+
+    if scheme in ("postgresql", "postgres", "postgresql+psycopg"):
+        scheme = "postgresql+asyncpg"
+
+    if "asyncpg" in scheme:
+        query_params = parse_qs(parsed.query)
+        clean_params = {}
+        for key, values in query_params.items():
+            if key in ("sslmode", "ssl"):
+                clean_params["ssl"] = values[0]
+            elif key not in ("channel_binding",):
+                clean_params[key] = values[0]
+        new_query = urlencode(clean_params)
+        return urlunparse((scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+
+    return url
+
+# 1. Database Connection Configuration
+DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL"))
 
 # Create Async Engine with connection pooling
 engine = create_async_engine(
