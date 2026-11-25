@@ -20,9 +20,9 @@ export const metadata: Metadata = {
   description:
     "Cloud Native autonomous coding agent platform with disposable Docker sandboxes, live ReAct traces, and Neon persistence.",
   icons: {
-    icon: "/nativebox-cube-orbit.svg",
-    shortcut: "/nativebox-cube-orbit.svg",
-    apple: "/nativebox-cube-orbit.svg",
+    icon: "/cloud-native-logo.svg",
+    shortcut: "/cloud-native-logo.svg",
+    apple: "/cloud-native-logo.svg",
   },
 };
 

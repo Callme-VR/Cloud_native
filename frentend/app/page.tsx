@@ -128,8 +128,9 @@ export default function CloudNativeDashboard() {
   // Command Console state
   const [inputPrompt, setInputPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<
-    "gemini-2.5-flash" | "gemini-2.5-pro"
+    "gemini-2.5-flash" | "gemini-3.5-flash-lite"
   >("gemini-2.5-flash");
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [selectedEffort, setSelectedEffort] = useState<
     "high" | "medium" | "low"
   >("high");
@@ -139,6 +140,20 @@ export default function CloudNativeDashboard() {
   const activeSocketRef = useRef<WebSocket | null>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        modelMenuRef.current &&
+        !modelMenuRef.current.contains(e.target as Node)
+      ) {
+        setModelMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // 1. Initial Data Fetching
   const refreshHealth = useCallback(async () => {
@@ -338,6 +353,7 @@ export default function CloudNativeDashboard() {
       try {
         const newChat = await createChatSession({
           title: content.slice(0, 30) + (content.length > 30 ? "..." : ""),
+          model_name: selectedModel,
         });
         setChats((prev) => [newChat, ...prev]);
         setSelectedChatId(newChat.id);
@@ -438,126 +454,125 @@ export default function CloudNativeDashboard() {
       {/* ────────────────────────────────────────────────────────────────── */}
       <aside
         className={`${
-          sidebarOpen ? "w-80" : "w-0 -translate-x-full"
-        } relative flex flex-col border-r border-border bg-card/60 backdrop-blur-md transition-all duration-300 ease-in-out shrink-0 overflow-hidden z-20`}
+          sidebarOpen ? "w-64" : "w-0 -translate-x-full border-r-0"
+        } relative flex flex-col border-r border-border/70 bg-muted/25 backdrop-blur-md transition-all duration-300 ease-in-out shrink-0 overflow-hidden z-20`}
       >
         {/* Brand Header */}
-        <div className="flex flex-col gap-3 p-4 border-b border-border">
+        <div className="flex flex-col gap-3 px-3.5 pt-3.5 pb-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="relative size-8 shrink-0 overflow-hidden rounded-xl border border-primary/20 bg-muted/30 shadow-xs flex items-center justify-center">
+              <div className="relative size-8 shrink-0 flex items-center justify-center">
                 <Image
-                  src="/nativebox-cube-orbit.svg"
+                  src="/cloud-native-logo.svg"
                   alt="Cloud Native Logo"
-                  width={28}
-                  height={28}
-                  className="object-cover"
+                  width={32}
+                  height={32}
+                  className="object-contain"
                   priority
                 />
               </div>
               <div className="flex flex-col">
-                <span className="font-semibold text-sm tracking-tight text-foreground">
+                <span className="font-semibold text-sm tracking-tight text-foreground leading-tight">
                   Cloud Native
                 </span>
-                <span className="text-[10px] text-muted-foreground uppercase tracking-widest">
+                <span className="text-[11px] text-muted-foreground/80 font-medium">
                   Autonomous Sandbox
                 </span>
               </div>
             </div>
-
-            {/* Quick Action Button using shadcn Button */}
-            <Button
-              variant="outline"
-              size="icon-xs"
-              onClick={() => {
-                if (activeTab === "runs") {
-                  setSelectedRunId(null);
-                  setSelectedRunDetail(null);
-                } else {
-                  createChatSession({ title: "New Conversation" }).then((c) => {
-                    setChats((prev) => [c, ...prev]);
-                    selectChat(c.id);
-                  });
-                }
-              }}
-              title="New Item"
-            >
-              <Plus className="size-3.5" />
-            </Button>
           </div>
 
-          {/* Hardened Cgroup Badges using shadcn Badge */}
-          <div className="grid grid-cols-3 gap-1 rounded-md bg-muted/50 p-1.5 text-[10px] text-muted-foreground border border-border/40">
+          {/* Hardened Cgroup Metrics */}
+          <div className="grid grid-cols-3 gap-1 rounded-xl bg-background/70 px-2 py-1.5 text-[10px] text-muted-foreground border border-border/50 shadow-2xs">
             <div className="flex items-center justify-center gap-1 font-mono">
-              <Cpu className="size-3 text-sky-400" />
+              <Cpu className="size-3 text-sky-500" />
               <span>1.0 CPU</span>
             </div>
-            <div className="flex items-center justify-center gap-1 font-mono">
-              <ShieldCheck className="size-3 text-emerald-400" />
+            <div className="flex items-center justify-center gap-1 font-mono border-x border-border/40">
+              <ShieldCheck className="size-3 text-emerald-500" />
               <span>512 MB</span>
             </div>
             <div className="flex items-center justify-center gap-1 font-mono">
-              <Layers className="size-3 text-purple-400" />
+              <Layers className="size-3 text-violet-500" />
               <span>64 PIDs</span>
             </div>
           </div>
         </div>
 
-        {/* Tab Switcher: Autonomous Runs vs Multi-Turn Chats */}
-        <div className="flex border-b border-border bg-muted/20 p-1 gap-1">
-          <Button
-            variant={activeTab === "runs" ? "default" : "ghost"}
-            size="xs"
-            className="flex-1 justify-center rounded-sm text-[11px]"
-            onClick={() => setActiveTab("runs")}
-          >
-            <Terminal className="size-3" />
-            <span>Sandbox Runs</span>
-            <Badge
-              variant="secondary"
-              className="ml-1 px-1 py-0 text-[9px] bg-background/50"
+        {/* Segmented Tab Switcher */}
+        <div className="px-3 pb-2.5">
+          <div className="grid grid-cols-2 rounded-xl bg-muted/70 p-1 gap-1 border border-border/40">
+            <button
+              type="button"
+              onClick={() => setActiveTab("runs")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 px-2 text-xs transition-all cursor-pointer ${
+                activeTab === "runs"
+                  ? "bg-background text-foreground font-medium shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
-              {runs.length}
-            </Badge>
-          </Button>
+              <Terminal className="size-3.5 shrink-0" />
+              <span>Runs</span>
+              <span
+                className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono ${
+                  activeTab === "runs"
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "bg-background/60 text-muted-foreground"
+                }`}
+              >
+                {runs.length}
+              </span>
+            </button>
 
-          <Button
-            variant={activeTab === "chats" ? "default" : "ghost"}
-            size="xs"
-            className="flex-1 justify-center rounded-sm text-[11px]"
-            onClick={() => setActiveTab("chats")}
-          >
-            <MessageSquare className="size-3" />
-            <span>Chats</span>
-            <Badge
-              variant="secondary"
-              className="ml-1 px-1 py-0 text-[9px] bg-background/50"
+            <button
+              type="button"
+              onClick={() => setActiveTab("chats")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 px-2 text-xs transition-all cursor-pointer ${
+                activeTab === "chats"
+                  ? "bg-background text-foreground font-medium shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
-              {chats.length}
-            </Badge>
-          </Button>
+              <MessageSquare className="size-3.5 shrink-0" />
+              <span>Chats</span>
+              <span
+                className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono ${
+                  activeTab === "chats"
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "bg-background/60 text-muted-foreground"
+                }`}
+              >
+                {chats.length}
+              </span>
+            </button>
+          </div>
         </div>
 
-        {/* Search input using shadcn Input */}
-        <div className="p-3 border-b border-border">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
+        {/* Search Input */}
+        <div className="px-3 pb-2.5">
+          <div className="relative flex items-center rounded-xl bg-background/75 border border-border/60 focus-within:border-primary/40 transition-colors px-2.5">
+            <Search className="size-3.5 text-muted-foreground/80 shrink-0" />
             <Input
               type="text"
               placeholder={`Search ${activeTab}...`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 text-xs h-8 border-b-border"
+              className="w-full pl-2 pr-1 text-xs h-8 border-0 border-b-0 focus-visible:border-b-0 focus-visible:ring-0 bg-transparent"
             />
           </div>
         </div>
 
         {/* Item List */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto px-2.5 py-1 space-y-1">
           {activeTab === "runs" ? (
             filteredRuns.length === 0 ? (
-              <div className="p-6 text-center text-xs text-muted-foreground">
-                No sandbox runs recorded yet. Launch a task below!
+              <div className="flex flex-col items-center justify-center py-10 px-4 text-center gap-2">
+                <div className="size-8 rounded-full bg-muted/70 flex items-center justify-center text-muted-foreground/70">
+                  <Terminal className="size-4" />
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  No sandbox runs yet. Launch a task below!
+                </p>
               </div>
             ) : (
               filteredRuns.map((r) => {
@@ -566,10 +581,10 @@ export default function CloudNativeDashboard() {
                   <div
                     key={r.id}
                     onClick={() => selectRun(r.id)}
-                    className={`group relative flex flex-col w-full text-left rounded-md p-2.5 transition-all text-xs border cursor-pointer ${
+                    className={`group relative flex flex-col w-full text-left rounded-xl p-2.5 transition-all text-xs border cursor-pointer ${
                       isSelected
-                        ? "bg-primary/10 border-primary/50 shadow-xs"
-                        : "hover:bg-muted/50 border-transparent text-muted-foreground hover:text-foreground"
+                        ? "bg-background border-primary/40 shadow-xs text-foreground"
+                        : "hover:bg-background/60 border-transparent text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-1 mb-1">
@@ -613,8 +628,13 @@ export default function CloudNativeDashboard() {
               })
             )
           ) : filteredChats.length === 0 ? (
-            <div className="p-6 text-center text-xs text-muted-foreground">
-              No chat sessions. Start typing below!
+            <div className="flex flex-col items-center justify-center py-10 px-4 text-center gap-2">
+              <div className="size-8 rounded-full bg-muted/70 flex items-center justify-center text-muted-foreground/70">
+                <MessageSquare className="size-4" />
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                No chat sessions. Start typing below!
+              </p>
             </div>
           ) : (
             filteredChats.map((c) => {
@@ -623,10 +643,10 @@ export default function CloudNativeDashboard() {
                 <div
                   key={c.id}
                   onClick={() => selectChat(c.id)}
-                  className={`group flex items-center justify-between w-full rounded-md p-2.5 transition-all text-xs border cursor-pointer ${
+                  className={`group flex items-center justify-between w-full rounded-xl p-2.5 transition-all text-xs border cursor-pointer ${
                     isSelected
-                      ? "bg-primary/10 border-primary/50 text-foreground"
-                      : "hover:bg-muted/50 border-transparent text-muted-foreground hover:text-foreground"
+                      ? "bg-background border-primary/40 shadow-xs text-foreground"
+                      : "hover:bg-background/60 border-transparent text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate">
@@ -647,17 +667,18 @@ export default function CloudNativeDashboard() {
         </div>
 
         {/* Sidebar Footer with Trigger Button */}
-        <div className="border-t border-border p-3 flex items-center justify-end">
+        <div className="p-3">
           <Button
-            size="xs"
+            size="sm"
             variant="default"
+            className="w-full justify-center rounded-xl normal-case tracking-normal font-medium shadow-xs"
             onClick={() => {
               setSelectedRunId(null);
               setSelectedRunDetail(null);
               setActiveTab("runs");
             }}
           >
-            <Plus className="size-3" />
+            <Plus className="size-3.5" />
             <span>New Run</span>
           </Button>
         </div>
@@ -684,13 +705,13 @@ export default function CloudNativeDashboard() {
             </Button>
 
             <div className="flex items-center gap-2.5">
-              <div className="relative size-6 shrink-0 overflow-hidden rounded-md border border-border/60">
+              <div className="relative size-6 shrink-0 flex items-center justify-center">
                 <Image
-                  src="/nativebox-cube-orbit.svg"
+                  src="/cloud-native-logo.svg"
                   alt="Cloud Native Logo"
                   width={24}
                   height={24}
-                  className="object-cover"
+                  className="object-contain"
                 />
               </div>
               <span className="font-semibold text-sm tracking-tight text-foreground">
@@ -927,25 +948,10 @@ export default function CloudNativeDashboard() {
             ) : (
               /* EMPTY STATE / STARTER DASHBOARD */
               <div className="mx-auto max-w-2xl py-8 space-y-8">
-                <div className="text-center space-y-4">
-                  <div className="relative mx-auto size-20 overflow-hidden rounded-2xl border border-primary/30 shadow-xl flex items-center justify-center bg-card">
-                    <Image
-                      src="/nativebox-cube-orbit.svg"
-                      alt="Cloud Native Logo"
-                      width={64}
-                      height={64}
-                      className="object-cover"
-                      priority
-                    />
-                  </div>
+                <div className="text-center">
                   <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
                     Cloud Native
                   </h1>
-                  <p className="text-sm text-muted-foreground max-w-lg mx-auto leading-relaxed">
-                    Autonomous AI coding harness executing multi-turn ReAct reasoning
-                    loops inside hardened, air-gapped Docker sandboxes with live
-                    telemetry and Neon persistence.
-                  </p>
                 </div>
 
                 {/* Starter Task Cards using shadcn Card */}
@@ -1017,13 +1023,13 @@ export default function CloudNativeDashboard() {
                           <span>You</span>
                         ) : (
                           <div className="flex items-center gap-1.5 text-primary">
-                            <div className="relative size-3.5 shrink-0 overflow-hidden rounded-full border border-primary/40">
+                            <div className="relative size-4 shrink-0 flex items-center justify-center">
                               <Image
-                                src="/nativebox-cube-orbit.svg"
+                                src="/cloud-native-logo.svg"
                                 alt="Cloud Native"
-                                width={14}
-                                height={14}
-                                className="object-cover"
+                                width={16}
+                                height={16}
+                                className="object-contain"
                               />
                             </div>
                             <span>Cloud Native Assistant</span>
@@ -1053,120 +1059,151 @@ export default function CloudNativeDashboard() {
         </main>
 
         {/* ────────────────────────────────────────────────────────────────── */}
-        {/* 4. BOTTOM COMMAND CONSOLE USING SHADCN COMPONENTS                  */}
+        {/* 4. BOTTOM FLOATING INPUT BOX                                       */}
         {/* ────────────────────────────────────────────────────────────────── */}
-        <div className="border-t border-border bg-card/70 backdrop-blur-md p-3 sm:p-4">
-          <div className="mx-auto max-w-3xl space-y-2">
-            {/* Input Container */}
-            <div className="relative rounded-lg border border-border bg-background/80 shadow-xs focus-within:border-primary/60 transition-colors p-2.5">
+        <div className="px-4 pb-4 pt-1">
+          <div className="mx-auto max-w-2xl">
+            <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-primary/50 transition-colors px-4 py-3">
               <Textarea
                 ref={textareaRef}
                 value={inputPrompt}
                 onChange={(e) => setInputPrompt(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     handleConsoleSubmit();
                   }
                 }}
                 placeholder={
                   activeTab === "runs"
-                    ? "Describe a coding task, bug fix, or test to execute in the isolated Docker sandbox... (Ctrl+Enter to run)"
-                    : "Message conversational memory agent... (Ctrl+Enter to send)"
+                    ? "How can I help you today?"
+                    : "Message conversational agent..."
                 }
-                className="w-full text-xs min-h-[60px] max-h-[160px] bg-transparent resize-none border-0 focus-visible:ring-0 p-0 shadow-none"
+                className="w-full text-sm min-h-[32px] max-h-[120px] bg-transparent resize-none border-0 border-b-0 focus-visible:border-b-0 focus-visible:ring-0 p-0 shadow-none"
               />
 
-              {/* Console Toolbar */}
-              <div className="flex items-center justify-between pt-2 border-t border-border/40 text-xs">
-                {/* Model & Effort Selector Pills */}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {/* Model Toggle */}
-                  <div className="flex items-center rounded-sm bg-muted/60 p-0.5 border border-border/50 text-[10px]">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedModel("gemini-2.5-flash")}
-                      className={`px-2 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
-                        selectedModel === "gemini-2.5-flash"
-                          ? "bg-primary text-primary-foreground font-semibold shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      Flash 2.5
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedModel("gemini-2.5-pro")}
-                      className={`px-2 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
-                        selectedModel === "gemini-2.5-pro"
-                          ? "bg-primary text-primary-foreground font-semibold shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      Pro 2.5
-                    </button>
-                  </div>
-
-                  {/* Effort Toggle */}
-                  <div className="flex items-center rounded-sm bg-muted/60 p-0.5 border border-border/50 text-[10px]">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedEffort("high")}
-                      className={`px-1.5 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
-                        selectedEffort === "high"
-                          ? "bg-secondary text-secondary-foreground font-semibold shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                      title="15 Iterations"
-                    >
-                      High
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedEffort("medium")}
-                      className={`px-1.5 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
-                        selectedEffort === "medium"
-                          ? "bg-secondary text-secondary-foreground font-semibold shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                      title="10 Iterations"
-                    >
-                      Med
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedEffort("low")}
-                      className={`px-1.5 py-0.5 rounded-xs transition-colors font-mono cursor-pointer ${
-                        selectedEffort === "low"
-                          ? "bg-secondary text-secondary-foreground font-semibold shadow-xs"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                      title="5 Iterations"
-                    >
-                      Low
-                    </button>
-                  </div>
+              {/* Bottom Bar (no divider line) */}
+              <div className="flex items-center justify-between pt-2 text-xs">
+                {/* Left: Clean Mode Pill (Runs / Chat) */}
+                <div className="flex items-center rounded-lg bg-muted/60 p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("runs")}
+                    className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      activeTab === "runs"
+                        ? "bg-background text-foreground font-medium shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Sandbox
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("chats")}
+                    className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      activeTab === "chats"
+                        ? "bg-background text-foreground font-medium shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Chat
+                  </button>
                 </div>
 
-                {/* Submit Action Button using shadcn Button */}
+                {/* Right: Model Popup Selector & Effort + Send */}
                 <div className="flex items-center gap-2">
-                  <span className="hidden sm:inline text-[10px] text-muted-foreground font-mono">
-                    ⌘+Enter
-                  </span>
+                  <div className="relative" ref={modelMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setModelMenuOpen((prev) => !prev)}
+                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
+                      title="Select Model"
+                    >
+                      <span>
+                        {selectedModel === "gemini-2.5-flash"
+                          ? "Gemini 2.5 Flash"
+                          : "Gemini 3.5 Flash-Lite"}
+                      </span>
+                      <ChevronDown className="size-3 opacity-70" />
+                    </button>
+
+                    {modelMenuOpen && (
+                      <div className="absolute bottom-full right-0 mb-2 w-60 rounded-xl border border-border bg-popover p-1.5 shadow-lg z-50">
+                        {[
+                          {
+                            id: "gemini-2.5-flash" as const,
+                            label: "Gemini 2.5 Flash",
+                            desc: "Balanced speed & reasoning",
+                          },
+                          {
+                            id: "gemini-3.5-flash-lite" as const,
+                            label: "Gemini 3.5 Flash-Lite",
+                            desc: "Ultra-fast lightweight model",
+                          },
+                        ].map((m) => {
+                          const active = selectedModel === m.id;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedModel(m.id);
+                                setModelMenuOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                                active
+                                  ? "bg-primary/10 text-foreground"
+                                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                              }`}
+                            >
+                              <div className="flex flex-col">
+                                <span className="text-xs font-medium text-foreground">
+                                  {m.label}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {m.desc}
+                                </span>
+                              </div>
+                              {active && (
+                                <Check className="size-3.5 text-primary shrink-0" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedEffort(
+                        selectedEffort === "high"
+                          ? "medium"
+                          : selectedEffort === "medium"
+                          ? "low"
+                          : "high"
+                      )
+                    }
+                    className="rounded-lg px-1.5 py-1 text-[11px] text-muted-foreground/80 hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer capitalize"
+                    title="Switch Effort"
+                  >
+                    {selectedEffort === "medium" ? "Med" : selectedEffort}
+                  </button>
+
                   <Button
-                    size="xs"
+                    size="icon-xs"
                     variant="default"
+                    className="rounded-lg"
                     onClick={handleConsoleSubmit}
                     isDisabled={!inputPrompt.trim() || isSubmitting || isSendingChat}
+                    title={activeTab === "runs" ? "Run Task" : "Send Message"}
                   >
                     {isSubmitting || isSendingChat ? (
-                      <RefreshCw className="size-3 animate-spin" />
+                      <RefreshCw className="size-3.5 animate-spin" />
                     ) : (
-                      <Send className="size-3" />
+                      <Send className="size-3.5" />
                     )}
-                    <span>
-                      {activeTab === "runs" ? "Run Task" : "Send Message"}
-                    </span>
                   </Button>
                 </div>
               </div>

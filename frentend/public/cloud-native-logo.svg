@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-labelledby="cn-title cn-desc">
+  <title id="cn-title">Cloud Native Logo</title>
+  <desc id="cn-desc">A cobalt-to-cyan rounded squircle containing a white geometric cloud and isometric sandbox cube.</desc>
+  <defs>
+    <linearGradient id="cn-bg" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1D4ED8"/>
+      <stop offset="55%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="cn-cloud" x1="16" y1="14" x2="48" y2="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#BAE6FD" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="cn-cube-top" x1="32" y1="25" x2="32" y2="39" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0F2FE"/>
+    </linearGradient>
+    <linearGradient id="cn-cube-left" x1="20" y1="32" x2="32" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#BAE6FD"/>
+      <stop offset="100%" stop-color="#7DD3FC"/>
+    </linearGradient>
+    <linearGradient id="cn-cube-right" x1="44" y1="32" x2="32" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#93C5FD"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded squircle container -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#cn-bg)"/>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="15.25" stroke="#FFFFFF" stroke-opacity="0.2" stroke-width="1.5"/>
+
+  <!-- Subtle cloud arch framing the cube -->
+  <path
+    d="M21 31.5C17.4 31.5 14.5 28.6 14.5 25C14.5 21.7 17 19 20.2 18.6C21.6 14.8 25.3 12 29.7 12C35.2 12 39.7 16.3 40 21.7C40.5 21.6 41 21.5 41.5 21.5C45.9 21.5 49.5 25.1 49.5 29.5C49.5 30.2 49.4 30.9 49.2 31.5"
+    stroke="url(#cn-cloud)"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Isometric sandbox cube -->
+  <path d="M32 24.5L44 31.4L32 38.3L20 31.4L32 24.5Z" fill="url(#cn-cube-top)"/>
+  <path d="M20 31.4L32 38.3V51.5L20 44.6V31.4Z" fill="url(#cn-cube-left)"/>
+  <path d="M44 31.4L32 38.3V51.5L44 44.6V31.4Z" fill="url(#cn-cube-right)"/>
+
+  <!-- Crisp inner edge highlights -->
+  <path d="M20 31.4L32 38.3L44 31.4M32 38.3V51.5" stroke="#1E3A8A" stroke-opacity="0.22" stroke-width="1.1" stroke-linejoin="round"/>
+</svg>
