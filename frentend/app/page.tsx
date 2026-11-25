@@ -647,11 +647,7 @@ export default function CloudNativeDashboard() {
         </div>
 
         {/* Sidebar Footer with Trigger Button */}
-        <div className="border-t border-border p-3 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
-            <Server className="size-3.5" />
-            <span>FastAPI Uvicorn</span>
-          </div>
+        <div className="border-t border-border p-3 flex items-center justify-end">
           <Button
             size="xs"
             variant="default"
@@ -709,49 +705,6 @@ export default function CloudNativeDashboard() {
                   : selectedChatDetail?.title || "chat"}
               </span>
             </div>
-          </div>
-
-          {/* Right Header: Server Health Badge, Model Indicator & Quick Launch */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Backend connection pill */}
-            <div
-              className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs border ${
-                backendStatus.online
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : "bg-rose-500/10 text-rose-400 border-rose-500/30"
-              }`}
-            >
-              <span
-                className={`size-1.5 rounded-full ${
-                  backendStatus.online ? "bg-emerald-400" : "bg-rose-400"
-                }`}
-              />
-              <span className="font-medium text-[11px] font-mono">
-                {backendStatus.online
-                  ? `Live (${backendStatus.latencyMs}ms)`
-                  : "Offline"}
-              </span>
-            </div>
-
-            {/* Model Badge */}
-            <div className="hidden sm:flex items-center gap-1 rounded-full bg-muted/60 border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground font-mono">
-              <Sparkles className="size-3 text-sky-400" />
-              <span>{selectedModel}</span>
-            </div>
-
-            {/* Header Action Button using shadcn Button */}
-            <Button
-              size="xs"
-              variant="default"
-              onClick={() => {
-                setSelectedRunId(null);
-                setSelectedRunDetail(null);
-                setActiveTab("runs");
-              }}
-            >
-              <Terminal className="size-3" />
-              <span>Launch Task</span>
-            </Button>
           </div>
         </header>
 
@@ -1041,9 +994,6 @@ export default function CloudNativeDashboard() {
                     {selectedChatDetail?.title || "Conversational Memory Thread"}
                   </span>
                 </div>
-                <span className="text-[11px] text-muted-foreground font-mono">
-                  Saved in Neon PostgreSQL
-                </span>
               </Card>
 
               {/* Chat Message Stream */}
